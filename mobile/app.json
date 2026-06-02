@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Lisbon Metro",
+    "slug": "lisbon-metro",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "lisbonmetro",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
+

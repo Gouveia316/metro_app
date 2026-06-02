@@ -1,0 +1,15 @@
+# Mobile
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+
+# Backend
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
