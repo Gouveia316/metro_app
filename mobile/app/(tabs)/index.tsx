@@ -5,6 +5,9 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { alerts, getStationLineIds, lines, stations } from "@/data/mockData";
+import type { TranslationKey } from "@/i18n/translations";
+import { useNearestStations } from "@/location/useNearestStations";
+import type { NearestStation } from "@/location/useNearestStations";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
@@ -14,8 +17,11 @@ const delayedLines = lines.filter((line) => line.status !== "good_service");
 const goodServiceCount = lines.length - delayedLines.length;
 const urgentAlerts = alerts.filter((alert) => alert.severity !== "info").length;
 
+type Translate = ReturnType<typeof useAppPreferences>["t"];
+
 export default function HomeScreen() {
   const { language, setLanguage, t, theme, themeName, toggleTheme } = useAppPreferences();
+  const { findNearestStations, nearestStation, status: nearestStationStatus } = useNearestStations();
   const styles = createStyles(theme.colors);
   const favoriteStationArea = favoriteStation.areaKey
     ? t(favoriteStation.areaKey)
@@ -71,6 +77,14 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      <NearestStationPanel
+        nearestStation={nearestStation}
+        onFindNearestStation={findNearestStations}
+        status={nearestStationStatus}
+        styles={styles}
+        t={t}
+      />
+
       <View style={styles.panel}>
         <View style={styles.panelHeader}>
           <View>
@@ -120,6 +134,96 @@ export default function HomeScreen() {
 
       <Text style={styles.disclaimer}>{t("app.disclaimer")}</Text>
     </Screen>
+  );
+}
+
+function getNearestStationMessageKey(status: ReturnType<typeof useNearestStations>["status"]): TranslationKey {
+  if (status === "loading") {
+    return "home.findingYourLocation";
+  }
+
+  if (status === "permission_denied") {
+    return "home.locationPermissionDenied";
+  }
+
+  if (status === "location_unavailable") {
+    return "home.locationUnavailable";
+  }
+
+  if (status === "stations_unavailable") {
+    return "home.stationsUnavailable";
+  }
+
+  if (status === "no_station_coordinates") {
+    return "home.noStationsWithCoordinates";
+  }
+
+  return "home.findNearestStation";
+}
+
+function formatDistance(t: Translate, distanceMeters: number) {
+  if (distanceMeters < 1000) {
+    return t("home.distanceMeters", { distance: Math.max(0, Math.round(distanceMeters)) });
+  }
+
+  return t("home.distanceKilometers", { distance: (distanceMeters / 1000).toFixed(1) });
+}
+
+function NearestStationPanel({
+  nearestStation,
+  onFindNearestStation,
+  status,
+  styles,
+  t,
+}: {
+  nearestStation?: NearestStation;
+  onFindNearestStation: () => void;
+  status: ReturnType<typeof useNearestStations>["status"];
+  styles: ReturnType<typeof createStyles>;
+  t: Translate;
+}) {
+  const isLoading = status === "loading";
+  const hasNearestStation = status === "success" && nearestStation;
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.panelHeader}>
+        <Text style={styles.sectionTitle}>{t("home.nearestStation")}</Text>
+      </View>
+
+      {hasNearestStation ? (
+        <>
+          <Text style={styles.stationName}>{nearestStation.name}</Text>
+          <Text style={styles.distanceText}>{formatDistance(t, nearestStation.distanceMeters)}</Text>
+          <View style={styles.badgeRow}>
+            {getStationLineIds(nearestStation).map((lineId) => (
+              <LineBadge key={lineId} lineId={lineId} />
+            ))}
+          </View>
+          <Text style={styles.privacyNote}>{t("home.locationPrivacyNote")}</Text>
+          <Link href={{ pathname: "/stations/[stationId]", params: { stationId: nearestStation.id } }} asChild>
+            <Pressable style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>{t("home.openStation")}</Text>
+            </Pressable>
+          </Link>
+        </>
+      ) : (
+        <>
+          <Text style={styles.stateText}>{t(getNearestStationMessageKey(status))}</Text>
+          <Text style={styles.privacyNote}>{t("home.locationPrivacyNote")}</Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isLoading}
+            onPress={onFindNearestStation}
+            style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isLoading ? t("home.findingYourLocation") : t("home.findNearestStation")}
+            </Text>
+          </Pressable>
+        </>
+      )}
+    </View>
   );
 }
 
@@ -292,6 +396,11 @@ function createStyles(colors: AppTheme["colors"]) {
       fontWeight: "700",
       marginTop: 2,
     },
+    distanceText: {
+      color: colors.accent,
+      fontSize: typography.body,
+      fontWeight: "900",
+    },
     favoriteMark: {
       backgroundColor: colors.accentSoft,
       borderRadius: radius.sm,
@@ -317,10 +426,24 @@ function createStyles(colors: AppTheme["colors"]) {
       marginTop: spacing.xs,
       paddingHorizontal: spacing.md,
     },
+    primaryButtonDisabled: {
+      opacity: 0.7,
+    },
     primaryButtonText: {
       color: colors.surface,
       fontSize: typography.body,
       fontWeight: "900",
+    },
+    privacyNote: {
+      color: colors.muted,
+      fontSize: typography.small,
+      lineHeight: 17,
+    },
+    stateText: {
+      color: colors.text,
+      fontSize: typography.body,
+      fontWeight: "800",
+      lineHeight: 22,
     },
     timestamp: {
       color: colors.muted,
