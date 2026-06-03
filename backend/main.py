@@ -1,14 +1,31 @@
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+try:
+    from .metro_client import (
+        MetroApiAuthError,
+        MetroApiConfigError,
+        MetroApiRequestError,
+        MetroOfficialApiClient,
+    )
+except ImportError:
+    from metro_client import (
+        MetroApiAuthError,
+        MetroApiConfigError,
+        MetroApiRequestError,
+        MetroOfficialApiClient,
+    )
+
 
 app = FastAPI(
     title="Lisbon Metro MVP API",
-    description="Mocked API for the initial Lisbon metro mobile app MVP.",
+    description="Lisbon metro mobile app backend with mocked MVP data and official Metro Lisboa API passthroughs.",
     version="0.1.0",
 )
+
+metro_official_client = MetroOfficialApiClient()
 
 
 LineStatus = Literal["good_service", "minor_delays", "suspended"]
@@ -166,3 +183,35 @@ def get_alerts() -> list[Alert]:
     # TODO: Replace mocked data with official/approved alerts/news integration.
     return ALERTS
 
+
+def get_official_metro_response(endpoint_name: str) -> dict[str, Any]:
+    try:
+        if endpoint_name == "lines":
+            return metro_official_client.get_lines()
+        if endpoint_name == "stations":
+            return metro_official_client.get_stations()
+        if endpoint_name == "wait-times":
+            return metro_official_client.get_wait_times()
+    except MetroApiConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except MetroApiAuthError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except MetroApiRequestError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    raise HTTPException(status_code=404, detail="Official Metro endpoint not found")
+
+
+@app.get("/metro/official/lines")
+def get_official_lines() -> dict[str, Any]:
+    return get_official_metro_response("lines")
+
+
+@app.get("/metro/official/stations")
+def get_official_stations() -> dict[str, Any]:
+    return get_official_metro_response("stations")
+
+
+@app.get("/metro/official/wait-times")
+def get_official_wait_times() -> dict[str, Any]:
+    return get_official_metro_response("wait-times")
