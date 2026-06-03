@@ -2,7 +2,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 
-import { fetchOfficialWaitTimes, getCachedOfficialStation } from "@/api/client";
+import { fetchOfficialStationArrivals, getCachedOfficialStation } from "@/api/client";
 import type { OfficialWaitTime } from "@/api/client";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
@@ -25,6 +25,9 @@ type ArrivalSection = {
   title: string;
   data: DisplayArrival[];
 };
+
+type ArrivalState = "arrivals_available" | "service_closed" | "no_arrivals_available" | "no_live_data";
+type ArrivalEmptyReason = "strike" | "closed" | "all_arrivals_unavailable" | "station_not_found_in_wait_times";
 
 type StationRouteParams = {
   latitude?: string;
@@ -145,6 +148,32 @@ function groupLiveArrivalsByPlatform(waitTimes: OfficialWaitTime[], t: Translate
     }));
 }
 
+function getEmptyArrivalMessage(
+  dataMode: "live" | "mocked",
+  state: ArrivalState | null,
+  emptyReason: ArrivalEmptyReason | null,
+  hasLivePlatforms: boolean,
+  t: Translate,
+) {
+  if (dataMode === "mocked") {
+    return t("station.empty");
+  }
+
+  if (state === "service_closed") {
+    return emptyReason === "strike" ? t("station.arrivalsServiceClosedStrike") : t("station.arrivalsServiceClosed");
+  }
+
+  if (state === "no_arrivals_available") {
+    return t("station.arrivalsUnavailable");
+  }
+
+  if (state === "no_live_data" || !hasLivePlatforms) {
+    return t("station.arrivalsNoLiveData");
+  }
+
+  return t("station.arrivalsUnavailable");
+}
+
 export default function StationDetailScreen() {
   const params = useLocalSearchParams<StationRouteParams>();
   const stationId = getParamValue(params.stationId);
@@ -152,8 +181,10 @@ export default function StationDetailScreen() {
   const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [arrivalState, setArrivalState] = useState<ArrivalState | null>(null);
+  const [emptyReason, setEmptyReason] = useState<ArrivalEmptyReason | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [waitTimes, setWaitTimes] = useState<OfficialWaitTime[]>([]);
+  const [platforms, setPlatforms] = useState<OfficialWaitTime[]>([]);
   const styles = createStyles(theme.colors);
   const station =
     stations.find((item) => item.id === stationId) ??
@@ -163,15 +194,22 @@ export default function StationDetailScreen() {
   useEffect(() => {
     let isMounted = true;
 
-    async function loadWaitTimes() {
+    async function loadStationArrivals() {
+      if (!stationId) {
+        setIsLoading(false);
+        return;
+      }
+
       try {
-        const result = await fetchOfficialWaitTimes();
+        const result = await fetchOfficialStationArrivals(stationId);
 
         if (!isMounted) {
           return;
         }
 
-        setWaitTimes(result.waitTimes);
+        setPlatforms(result.platforms);
+        setArrivalState(result.state);
+        setEmptyReason(result.emptyReason);
         setDataMode("live");
         setUpdatedAt(result.updatedAt);
         setHasError(false);
@@ -180,7 +218,9 @@ export default function StationDetailScreen() {
           return;
         }
 
-        setWaitTimes([]);
+        setPlatforms([]);
+        setArrivalState(null);
+        setEmptyReason(null);
         setDataMode("mocked");
         setUpdatedAt(null);
         setHasError(true);
@@ -191,12 +231,12 @@ export default function StationDetailScreen() {
       }
     }
 
-    loadWaitTimes();
+    loadStationArrivals();
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [stationId]);
 
   if (!station) {
     return (
@@ -210,17 +250,12 @@ export default function StationDetailScreen() {
   }
 
   const arrivals = getMockArrivalsForStation(station);
-  const stationWaitTimes = waitTimes.filter((waitTime) => waitTime.stationId === station.id);
   const arrivalSections =
     dataMode === "live"
-      ? groupLiveArrivalsByPlatform(stationWaitTimes, t)
+      ? groupLiveArrivalsByPlatform(platforms, t)
       : groupMockArrivalsByDirection(arrivals, t);
-  const emptyMessage =
-    dataMode === "live" && stationWaitTimes.length === 0
-      ? t("station.arrivalsNoLiveData")
-      : dataMode === "live"
-        ? t("station.arrivalsUnavailable")
-        : t("station.empty");
+  const hasLivePlatforms = platforms.length > 0;
+  const emptyMessage = getEmptyArrivalMessage(dataMode, arrivalState, emptyReason, hasLivePlatforms, t);
 
   return (
     <Screen>

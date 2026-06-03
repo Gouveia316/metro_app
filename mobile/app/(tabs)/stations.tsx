@@ -13,23 +13,62 @@ import type { AppTheme } from "@/styles/theme";
 
 type Translate = ReturnType<typeof useAppPreferences>["t"];
 type StationLineFilter = "all" | "blue" | "yellow" | "green" | "red";
+type StationAliasConfig = {
+  displayAliases?: string[];
+  displayAliasesEn?: string[];
+  searchAliases: string[];
+};
 
 const lineFilters: StationLineFilter[] = ["all", "blue", "yellow", "green", "red"];
 
-const stationAliasesByName: Record<string, string[]> = {
-  aeroporto: ["Airport", "Lisbon Airport"],
-  baixachiado: ["Baixa Chiado", "Chiado", "Baixa"],
-  caisdosodre: ["Cais", "Sodre", "Sodré"],
-  cidadeuniversitaria: ["Cidade Universitaria", "Universidade"],
-  colegiomilitarluz: ["Colombo", "Colegio Militar", "Luz"],
-  entrecampos: ["Entrecampos", "Entre-Campos"],
-  jardimzoologico: ["Sete Rios", "sete rios"],
-  marquesdepombal: ["Marques", "Marquês", "Rotunda"],
-  oriente: ["Gare do Oriente", "Oriente Station"],
-  pracadeespanha: ["Praca de Espanha"],
-  santapolonia: ["Santa Apolonia", "Apolonia"],
-  saosebastiao: ["Sao Sebastiao", "S. Sebastiao", "S Sebastião"],
-  terreirodopaco: ["Terreiro", "Praca do Comercio", "Praça do Comércio"],
+const stationAliasesByName: Record<string, StationAliasConfig> = {
+  aeroporto: {
+    displayAliasesEn: ["Airport", "Lisbon Airport"],
+    searchAliases: ["Airport", "Lisbon Airport"],
+  },
+  baixachiado: {
+    displayAliases: ["Chiado", "Baixa"],
+    searchAliases: ["Baixa Chiado", "Chiado", "Baixa"],
+  },
+  caisdosodre: {
+    searchAliases: ["Cais", "Sodre"],
+  },
+  cidadeuniversitaria: {
+    searchAliases: ["Cidade Universitaria", "Universidade"],
+  },
+  colegiomilitarluz: {
+    displayAliases: ["Colombo", "Luz"],
+    searchAliases: ["Colombo", "Colegio Militar", "Luz"],
+  },
+  entrecampos: {
+    searchAliases: ["Entrecampos", "Entre-Campos"],
+  },
+  jardimzoologico: {
+    displayAliases: ["Sete Rios"],
+    searchAliases: ["Sete Rios"],
+  },
+  marquesdepombal: {
+    displayAliases: ["Rotunda"],
+    searchAliases: ["Marques", "Marques de Pombal", "Rotunda"],
+  },
+  oriente: {
+    displayAliases: ["Gare do Oriente"],
+    displayAliasesEn: ["Gare do Oriente", "Oriente Station"],
+    searchAliases: ["Gare do Oriente", "Oriente Station"],
+  },
+  pracadeespanha: {
+    searchAliases: ["Praca de Espanha"],
+  },
+  santapolonia: {
+    searchAliases: ["Santa Apolonia", "Apolonia"],
+  },
+  saosebastiao: {
+    searchAliases: ["Sao Sebastiao", "S. Sebastiao", "S Sebastiao"],
+  },
+  terreirodopaco: {
+    displayAliases: ["Praca do Comercio"],
+    searchAliases: ["Terreiro", "Praca do Comercio"],
+  },
 };
 
 function normalizeSearchText(value: string) {
@@ -47,8 +86,119 @@ function normalizeSearchKey(value: string) {
   return normalizeSearchText(value).replace(/\s+/g, "");
 }
 
-function getStationAliases(station: Station) {
-  return stationAliasesByName[normalizeSearchKey(station.name)] ?? [];
+function getStationAliasConfig(station: Station) {
+  return stationAliasesByName[normalizeSearchKey(station.name)];
+}
+
+function getStationSearchAliases(station: Station) {
+  return getStationAliasConfig(station)?.searchAliases ?? [];
+}
+
+function getStationDisplayAliases(station: Station, language: string) {
+  const config = getStationAliasConfig(station);
+
+  if (!config) {
+    return [];
+  }
+
+  return language === "en"
+    ? [...(config.displayAliases ?? []), ...(config.displayAliasesEn ?? [])]
+    : config.displayAliases ?? [];
+}
+
+function getFuzzyThreshold(query: string) {
+  if (query.length <= 3) {
+    return 0;
+  }
+
+  if (query.length <= 6) {
+    return 1;
+  }
+
+  return 2;
+}
+
+function levenshteinDistance(firstValue: string, secondValue: string) {
+  const distances = Array.from({ length: firstValue.length + 1 }, (_, index) => index);
+
+  for (let secondIndex = 1; secondIndex <= secondValue.length; secondIndex += 1) {
+    let previousDistance = distances[0];
+    distances[0] = secondIndex;
+
+    for (let firstIndex = 1; firstIndex <= firstValue.length; firstIndex += 1) {
+      const savedDistance = distances[firstIndex];
+      const cost = firstValue[firstIndex - 1] === secondValue[secondIndex - 1] ? 0 : 1;
+
+      distances[firstIndex] = Math.min(
+        distances[firstIndex] + 1,
+        distances[firstIndex - 1] + 1,
+        previousDistance + cost,
+      );
+      previousDistance = savedDistance;
+    }
+  }
+
+  return distances[firstValue.length];
+}
+
+function getSearchTokens(value: string) {
+  return normalizeSearchText(value)
+    .split(" ")
+    .filter((token) => token.length > 0);
+}
+
+function isFuzzyMatch(query: string, candidates: string[]) {
+  const threshold = getFuzzyThreshold(query);
+
+  if (threshold === 0) {
+    return false;
+  }
+
+  return candidates.some((candidate) => {
+    if (Math.abs(candidate.length - query.length) > threshold) {
+      return false;
+    }
+
+    return levenshteinDistance(query, candidate) <= threshold;
+  });
+}
+
+function getStationSearchRank(station: Station, query: string) {
+  if (!query) {
+    return 0;
+  }
+
+  const normalizedName = normalizeSearchText(station.name);
+  const normalizedAliases = getStationSearchAliases(station).map(normalizeSearchText);
+
+  if (normalizedName === query) {
+    return 1;
+  }
+
+  if (normalizedName.startsWith(query)) {
+    return 2;
+  }
+
+  if (normalizedAliases.some((alias) => alias === query)) {
+    return 3;
+  }
+
+  if (normalizedName.includes(query)) {
+    return 4;
+  }
+
+  if (normalizedAliases.some((alias) => alias.includes(query))) {
+    return 5;
+  }
+
+  const fuzzyCandidates = [
+    normalizedName,
+    ...normalizedAliases,
+    ...getSearchTokens(normalizedName),
+    ...normalizedAliases.flatMap(getSearchTokens),
+  ];
+
+  return isFuzzyMatch(query, fuzzyCandidates) ? 6 : null;
 }
 
 function getLineFilterLabel(filter: StationLineFilter, t: Translate) {
@@ -67,7 +217,7 @@ export default function StationsScreen() {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const { t, theme } = useAppPreferences();
+  const { language, t, theme } = useAppPreferences();
   const styles = createStyles(theme.colors);
 
   useEffect(() => {
@@ -117,17 +267,24 @@ export default function StationsScreen() {
 
         return activeLineFilter === "all" || lineIds.includes(activeLineFilter);
       })
-      .filter((station) => {
-        if (!normalizedQuery) {
-          return true;
+      .map((station) => ({
+        rank: getStationSearchRank(station, normalizedQuery),
+        station,
+      }))
+      .filter((result) => {
+        return normalizedQuery ? result.rank !== null : true;
+      })
+      .sort((firstResult, secondResult) => {
+        const firstRank = firstResult.rank ?? 0;
+        const secondRank = secondResult.rank ?? 0;
+
+        if (firstRank !== secondRank) {
+          return firstRank - secondRank;
         }
 
-        const aliases = getStationAliases(station);
-        const searchableText = normalizeSearchText([station.name, ...aliases].join(" "));
-
-        return searchableText.includes(normalizedQuery);
+        return firstResult.station.name.localeCompare(secondResult.station.name);
       })
-      .sort((firstStation, secondStation) => firstStation.name.localeCompare(secondStation.name));
+      .map((result) => result.station);
   }, [activeLineFilter, displayStations, query]);
 
   return (
@@ -201,7 +358,7 @@ export default function StationsScreen() {
         }
         renderItem={({ item }) => {
           const lineIds = getStationLineIds(item);
-          const aliases = getStationAliases(item);
+          const aliases = getStationDisplayAliases(item, language);
 
           return (
             <Link

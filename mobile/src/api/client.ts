@@ -2,21 +2,27 @@ import { BACKEND_BASE_URL } from "@/api/config";
 import { lines } from "@/data/mockData";
 import type { LineStatus, MetroLine, Station } from "@/data/mockData";
 
-type OfficialLineKey = "azul" | "amarela" | "verde" | "vermelha";
-type OfficialLineShortKey = "azul_curta" | "amarela_curta" | "verde_curta" | "vermelha_curta";
+type NormalizedLineStatus = "normal" | "interrupted" | "closed" | "disrupted" | "unknown";
 
-type OfficialLinesResponse = {
+type NormalizedLine = {
+  id: string;
+  namePt: string;
+  nameEn: string;
+  color: string;
+  status: NormalizedLineStatus;
+  statusReason: "strike" | "closed" | null;
+  message: string;
+};
+
+type NormalizedLinesResponse = {
   source: string;
   updatedAt: string;
-  data: {
-    resposta: Partial<Record<OfficialLineKey | OfficialLineShortKey, string | null | undefined>>;
-    codigo: string;
-  };
+  lines: NormalizedLine[];
 };
 
 export type OfficialLineStatusResult = {
   lines: MetroLine[];
-  source: OfficialLinesResponse["source"];
+  source: NormalizedLinesResponse["source"];
   updatedAt: string;
 };
 
@@ -41,29 +47,6 @@ export type OfficialStationsResult = {
   updatedAt: string;
 };
 
-type OfficialWaitTimeRow = {
-  stop_id?: string | null;
-  cais?: string | null;
-  hora?: string | null;
-  comboio?: string | null;
-  tempoChegada1?: string | null;
-  comboio2?: string | null;
-  tempoChegada2?: string | null;
-  comboio3?: string | null;
-  tempoChegada3?: string | null;
-  destino?: string | null;
-  sairServico?: string | null;
-};
-
-type OfficialWaitTimesResponse = {
-  source: string;
-  updatedAt: string;
-  data: {
-    resposta: OfficialWaitTimeRow[];
-    codigo: string;
-  };
-};
-
 export type OfficialWaitTimeArrival = {
   id: string;
   minutes: number;
@@ -73,70 +56,64 @@ export type OfficialWaitTimeArrival = {
 export type OfficialWaitTime = {
   arrivals: OfficialWaitTimeArrival[];
   destinationCode: string;
+  destinationName: string | null;
   outOfService: boolean;
   platformId: string;
   rawTimestamp: string;
-  stationId: string;
 };
 
-export type OfficialWaitTimesResult = {
-  source: OfficialWaitTimesResponse["source"];
+type NormalizedStationArrival = {
+  trainId: string;
+  minutes: number;
+};
+
+type NormalizedStationPlatform = {
+  id: string;
+  destinationCode: string | null;
+  destinationName: string | null;
+  outOfService: boolean;
+  rawTimestamp: string | null;
+  arrivals: NormalizedStationArrival[];
+};
+
+type NormalizedStationArrivalsResponse = {
+  source: string;
   updatedAt: string;
-  waitTimes: OfficialWaitTime[];
+  stationId: string;
+  state: "arrivals_available" | "service_closed" | "no_arrivals_available" | "no_live_data";
+  emptyReason: "strike" | "closed" | "all_arrivals_unavailable" | "station_not_found_in_wait_times" | null;
+  platforms: NormalizedStationPlatform[];
 };
 
-const officialLineFields: Record<
-  MetroLine["id"],
-  { messageKey: OfficialLineKey; shortStatusKey: OfficialLineShortKey }
-> = {
-  blue: { messageKey: "azul", shortStatusKey: "azul_curta" },
-  yellow: { messageKey: "amarela", shortStatusKey: "amarela_curta" },
-  green: { messageKey: "verde", shortStatusKey: "verde_curta" },
-  red: { messageKey: "vermelha", shortStatusKey: "vermelha_curta" },
+export type StationArrivalsResult = {
+  emptyReason: NormalizedStationArrivalsResponse["emptyReason"];
+  platforms: OfficialWaitTime[];
+  source: NormalizedStationArrivalsResponse["source"];
+  state: NormalizedStationArrivalsResponse["state"];
+  stationId: string;
+  updatedAt: string;
 };
 
 let officialStationsCache: Station[] = [];
 
-function normalizeText(value: string | null | undefined) {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalizeOfficialStatus(statusText: string | null | undefined): LineStatus {
-  const normalizedStatus = normalizeText(statusText);
-
-  if (!normalizedStatus) {
-    return "unknown";
-  }
-
-  if (normalizedStatus === "interrompida") {
-    return "suspended";
-  }
-
-  if (
-    normalizedStatus.includes("servico encerrado") ||
-    normalizedStatus.includes("encerrado") ||
-    normalizedStatus.includes("greve")
-  ) {
-    return "closed";
-  }
-
-  if (normalizedStatus === "normal" || normalizedStatus === "ok") {
+function mapNormalizedLineStatus(status: NormalizedLineStatus): LineStatus {
+  if (status === "normal") {
     return "good_service";
   }
 
-  if (
-    normalizedStatus.includes("condicionada") ||
-    normalizedStatus.includes("perturbada") ||
-    normalizedStatus.includes("atrasos")
-  ) {
+  if (status === "interrupted") {
+    return "suspended";
+  }
+
+  if (status === "closed") {
+    return "closed";
+  }
+
+  if (status === "disrupted") {
     return "disrupted";
   }
 
-  return "disrupted";
+  return "unknown";
 }
 
 function getStatusLabelKey(status: LineStatus): MetroLine["statusLabelKey"] {
@@ -183,18 +160,20 @@ function getFallbackMessageKey(status: LineStatus): MetroLine["noteKey"] {
   return "line.statusMessage.disrupted";
 }
 
-function mapOfficialLines(response: OfficialLinesResponse): MetroLine[] {
-  const officialStatus = response.data.resposta;
+function mapNormalizedLines(response: NormalizedLinesResponse): MetroLine[] {
+  const lineById: Record<string, MetroLine> = Object.fromEntries(lines.map((line) => [line.id, line]));
 
-  return lines.map((line) => {
-    const fields = officialLineFields[line.id];
-    const status = normalizeOfficialStatus(officialStatus[fields.shortStatusKey]);
-    const message = (officialStatus[fields.messageKey] ?? "").trim();
+  return response.lines.map((line) => {
+    const existingLine = lineById[line.id] ?? lines[0];
+    const status = mapNormalizedLineStatus(line.status);
+    const message = line.message.trim();
 
     return {
-      ...line,
+      ...existingLine,
+      color: line.color || existingLine.color,
+      id: line.id,
       note: message || undefined,
-      noteKey: message ? line.noteKey : getFallbackMessageKey(status),
+      noteKey: message ? existingLine.noteKey : getFallbackMessageKey(status),
       status,
       statusLabelKey: getStatusLabelKey(status),
     };
@@ -213,77 +192,32 @@ function mapNormalizedStations(response: NormalizedStationsResponse): Station[] 
   }));
 }
 
-function parseArrivalMinutes(value: string | null | undefined) {
-  const arrivalText = (value ?? "").trim();
-
-  if (!arrivalText || arrivalText === "--" || !/^\d+$/.test(arrivalText)) {
-    return undefined;
-  }
-
-  return Number.parseInt(arrivalText, 10);
-}
-
-function mapOfficialWaitTimeArrival(
-  trainId: string | null | undefined,
-  minutesText: string | null | undefined,
-  id: string,
-): OfficialWaitTimeArrival | undefined {
-  const minutes = parseArrivalMinutes(minutesText);
-
-  if (minutes == null) {
-    return undefined;
-  }
-
-  return {
-    id,
-    minutes,
-    trainId: trainId?.trim() || "-",
-  };
-}
-
-function mapOfficialWaitTimes(response: OfficialWaitTimesResponse): OfficialWaitTime[] {
-  return response.data.resposta
-    .map((row, rowIndex) => {
-      const stationId = row.stop_id?.trim();
-      const platformId = row.cais?.trim();
-
-      if (!stationId || !platformId) {
-        return null;
-      }
-
-      const arrivals = [
-        mapOfficialWaitTimeArrival(row.comboio, row.tempoChegada1, `${stationId}-${platformId}-${rowIndex}-1`),
-        mapOfficialWaitTimeArrival(row.comboio2, row.tempoChegada2, `${stationId}-${platformId}-${rowIndex}-2`),
-        mapOfficialWaitTimeArrival(row.comboio3, row.tempoChegada3, `${stationId}-${platformId}-${rowIndex}-3`),
-      ].filter((arrival): arrival is OfficialWaitTimeArrival => Boolean(arrival));
-
-      return {
-        arrivals,
-        destinationCode: row.destino?.trim() || "",
-        outOfService: row.sairServico?.trim() === "1",
-        platformId,
-        rawTimestamp: row.hora?.trim() || "",
-        stationId,
-      };
-    })
-    .filter((waitTime): waitTime is OfficialWaitTime => Boolean(waitTime));
+function mapNormalizedStationPlatforms(response: NormalizedStationArrivalsResponse): OfficialWaitTime[] {
+  return response.platforms.map((platform) => ({
+    arrivals: platform.arrivals.map((arrival, arrivalIndex) => ({
+      id: `${platform.id}-${arrival.trainId}-${arrivalIndex}`,
+      minutes: arrival.minutes,
+      trainId: arrival.trainId,
+    })),
+    destinationCode: platform.destinationCode ?? "",
+    destinationName: platform.destinationName,
+    outOfService: platform.outOfService,
+    platformId: platform.id,
+    rawTimestamp: platform.rawTimestamp ?? "",
+  }));
 }
 
 export async function fetchOfficialLineStatus(): Promise<OfficialLineStatusResult> {
-  const response = await fetch(`${BACKEND_BASE_URL}/metro/official/lines`);
+  const response = await fetch(`${BACKEND_BASE_URL}/metro/lines/status`);
 
   if (!response.ok) {
     throw new Error(`Metro lines request failed with status ${response.status}`);
   }
 
-  const payload = (await response.json()) as OfficialLinesResponse;
-
-  if (payload.data.codigo !== "200") {
-    throw new Error(`Metro lines API returned code ${payload.data.codigo}`);
-  }
+  const payload = (await response.json()) as NormalizedLinesResponse;
 
   return {
-    lines: mapOfficialLines(payload),
+    lines: mapNormalizedLines(payload),
     source: payload.source,
     updatedAt: payload.updatedAt,
   };
@@ -310,22 +244,21 @@ export function getCachedOfficialStation(stationId: string) {
   return officialStationsCache.find((station) => station.id === stationId);
 }
 
-export async function fetchOfficialWaitTimes(): Promise<OfficialWaitTimesResult> {
-  const response = await fetch(`${BACKEND_BASE_URL}/metro/official/wait-times`);
+export async function fetchOfficialStationArrivals(stationId: string): Promise<StationArrivalsResult> {
+  const response = await fetch(`${BACKEND_BASE_URL}/metro/stations/${stationId}/arrivals`);
 
   if (!response.ok) {
-    throw new Error(`Metro wait-times request failed with status ${response.status}`);
+    throw new Error(`Metro station arrivals request failed with status ${response.status}`);
   }
 
-  const payload = (await response.json()) as OfficialWaitTimesResponse;
-
-  if (payload.data.codigo !== "200") {
-    throw new Error(`Metro wait-times API returned code ${payload.data.codigo}`);
-  }
+  const payload = (await response.json()) as NormalizedStationArrivalsResponse;
 
   return {
+    emptyReason: payload.emptyReason,
+    platforms: mapNormalizedStationPlatforms(payload),
     source: payload.source,
+    state: payload.state,
+    stationId: payload.stationId,
     updatedAt: payload.updatedAt,
-    waitTimes: mapOfficialWaitTimes(payload),
   };
 }
