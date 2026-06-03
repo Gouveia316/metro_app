@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 
-import { colors } from "@/styles/theme";
+import { useAppPreferences } from "@/state/AppPreferences";
 
 type TabIconName = keyof typeof Ionicons.glyphMap;
 
@@ -12,6 +12,9 @@ function tabIcon(name: TabIconName) {
 }
 
 export default function TabLayout() {
+  const { t, theme } = useAppPreferences();
+  const { colors } = theme;
+
   return (
     <Tabs
       screenOptions={{
@@ -29,32 +32,31 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
+          title: t("nav.home"),
           tabBarIcon: tabIcon("home-outline"),
         }}
       />
       <Tabs.Screen
         name="lines"
         options={{
-          title: "Lines",
+          title: t("nav.lines"),
           tabBarIcon: tabIcon("git-branch-outline"),
         }}
       />
       <Tabs.Screen
         name="stations"
         options={{
-          title: "Stations",
+          title: t("nav.stations"),
           tabBarIcon: tabIcon("search-outline"),
         }}
       />
       <Tabs.Screen
         name="alerts"
         options={{
-          title: "Alerts",
+          title: t("nav.alerts"),
           tabBarIcon: tabIcon("alert-circle-outline"),
         }}
       />
     </Tabs>
   );
 }
-

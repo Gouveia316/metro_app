@@ -1,12 +1,23 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
-import { colors } from "@/styles/theme";
+import { AppPreferencesProvider, useAppPreferences } from "@/state/AppPreferences";
 
 export default function RootLayout() {
   return (
+    <AppPreferencesProvider>
+      <RootNavigator />
+    </AppPreferencesProvider>
+  );
+}
+
+function RootNavigator() {
+  const { t, theme, themeName } = useAppPreferences();
+  const { colors } = theme;
+
+  return (
     <>
-      <StatusBar style="dark" />
+      <StatusBar style={themeName === "light" ? "dark" : "light"} />
       <Stack
         screenOptions={{
           contentStyle: { backgroundColor: colors.background },
@@ -19,7 +30,7 @@ export default function RootLayout() {
         <Stack.Screen
           name="stations/[stationId]"
           options={{
-            title: "Station",
+            title: t("nav.station"),
             presentation: "card",
           }}
         />
@@ -27,4 +38,3 @@ export default function RootLayout() {
     </>
   );
 }
-

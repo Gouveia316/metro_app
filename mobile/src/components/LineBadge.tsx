@@ -1,13 +1,16 @@
 import { StyleSheet, Text, View } from "react-native";
 
 import { lineById } from "@/data/mockData";
-import { colors, spacing, typography } from "@/styles/theme";
+import { useAppPreferences } from "@/state/AppPreferences";
+import { radius, spacing, typography } from "@/styles/theme";
 
 type Props = {
   lineId: string;
 };
 
 export function LineBadge({ lineId }: Props) {
+  const { t, theme } = useAppPreferences();
+  const { colors } = theme;
   const line = lineById[lineId];
 
   if (!line) {
@@ -15,9 +18,11 @@ export function LineBadge({ lineId }: Props) {
   }
 
   return (
-    <View style={styles.badge}>
+    <View style={[styles.badge, { backgroundColor: colors.surface, borderColor: line.color }]}>
       <View style={[styles.dot, { backgroundColor: line.color }]} />
-      <Text style={styles.label}>{line.name.replace(" Line", "")}</Text>
+      <Text style={[styles.label, { color: colors.text }]}>
+        {t(line.nameKey).replace(" Line", "").replace("Linha ", "")}
+      </Text>
     </View>
   );
 }
@@ -26,22 +31,20 @@ const styles = StyleSheet.create({
   badge: {
     alignItems: "center",
     alignSelf: "flex-start",
-    backgroundColor: colors.soft,
-    borderRadius: 8,
+    borderRadius: radius.sm,
+    borderWidth: 1,
     flexDirection: "row",
     gap: spacing.xs,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+    paddingVertical: spacing.xs,
   },
   dot: {
     borderRadius: 999,
-    height: 8,
-    width: 8,
+    height: 9,
+    width: 9,
   },
   label: {
-    color: colors.text,
-    fontSize: typography.small,
+    fontSize: typography.caption,
     fontWeight: "800",
   },
 });
-
