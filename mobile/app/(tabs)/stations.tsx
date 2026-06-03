@@ -12,21 +12,56 @@ import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
 
 type Translate = ReturnType<typeof useAppPreferences>["t"];
+type StationLineFilter = "all" | "blue" | "yellow" | "green" | "red";
 
-function getStationAreaText(station: Station, t: Translate) {
-  if (station.areaKey) {
-    return t(station.areaKey);
+const lineFilters: StationLineFilter[] = ["all", "blue", "yellow", "green", "red"];
+
+const stationAliasesByName: Record<string, string[]> = {
+  aeroporto: ["Airport", "Lisbon Airport"],
+  baixachiado: ["Baixa Chiado", "Chiado", "Baixa"],
+  caisdosodre: ["Cais", "Sodre", "Sodré"],
+  cidadeuniversitaria: ["Cidade Universitaria", "Universidade"],
+  colegiomilitarluz: ["Colombo", "Colegio Militar", "Luz"],
+  entrecampos: ["Entrecampos", "Entre-Campos"],
+  jardimzoologico: ["Sete Rios", "sete rios"],
+  marquesdepombal: ["Marques", "Marquês", "Rotunda"],
+  oriente: ["Gare do Oriente", "Oriente Station"],
+  pracadeespanha: ["Praca de Espanha"],
+  santapolonia: ["Santa Apolonia", "Apolonia"],
+  saosebastiao: ["Sao Sebastiao", "S. Sebastiao", "S Sebastião"],
+  terreirodopaco: ["Terreiro", "Praca do Comercio", "Praça do Comércio"],
+};
+
+function normalizeSearchText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeSearchKey(value: string) {
+  return normalizeSearchText(value).replace(/\s+/g, "");
+}
+
+function getStationAliases(station: Station) {
+  return stationAliasesByName[normalizeSearchKey(station.name)] ?? [];
+}
+
+function getLineFilterLabel(filter: StationLineFilter, t: Translate) {
+  if (filter === "all") {
+    return t("stations.filter.all");
   }
 
-  if (station.zone) {
-    return t("stations.zone", { zone: station.zone });
-  }
-
-  return t("stations.zoneUnknown");
+  return t(lineById[filter].nameKey).replace(" Line", "").replace("Linha ", "");
 }
 
 export default function StationsScreen() {
   const [query, setQuery] = useState("");
+  const [activeLineFilter, setActiveLineFilter] = useState<StationLineFilter>("all");
   const [displayStations, setDisplayStations] = useState<Station[]>(stations);
   const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
   const [hasError, setHasError] = useState(false);
@@ -74,21 +109,26 @@ export default function StationsScreen() {
   }, []);
 
   const filteredStations = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = normalizeSearchText(query);
 
-    if (!normalizedQuery) {
-      return displayStations;
-    }
+    return displayStations
+      .filter((station) => {
+        const lineIds = getStationLineIds(station);
 
-    return displayStations.filter((station) => {
-      const lineNames = getStationLineIds(station)
-        .map((lineId) => t(lineById[lineId]?.nameKey ?? "nav.lines"))
-        .join(" ");
-      const searchableText = `${station.name} ${getStationAreaText(station, t)} ${lineNames}`.toLowerCase();
+        return activeLineFilter === "all" || lineIds.includes(activeLineFilter);
+      })
+      .filter((station) => {
+        if (!normalizedQuery) {
+          return true;
+        }
 
-      return searchableText.includes(normalizedQuery);
-    });
-  }, [displayStations, query, t]);
+        const aliases = getStationAliases(station);
+        const searchableText = normalizeSearchText([station.name, ...aliases].join(" "));
+
+        return searchableText.includes(normalizedQuery);
+      })
+      .sort((firstStation, secondStation) => firstStation.name.localeCompare(secondStation.name));
+  }, [activeLineFilter, displayStations, query]);
 
   return (
     <Screen>
@@ -106,13 +146,35 @@ export default function StationsScreen() {
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder={t("stations.searchPlaceholder")}
+              placeholder={t("stations.searchByStationOrNickname")}
               placeholderTextColor={theme.colors.muted}
               autoCapitalize="none"
               autoCorrect={false}
               clearButtonMode="while-editing"
               style={styles.input}
             />
+            <View style={styles.filterRow}>
+              {lineFilters.map((filter) => (
+                <Pressable
+                  key={filter}
+                  accessibilityRole="button"
+                  onPress={() => setActiveLineFilter(filter)}
+                  style={[
+                    styles.filterButton,
+                    activeLineFilter === filter && styles.filterButtonActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.filterButtonText,
+                      activeLineFilter === filter && styles.filterButtonTextActive,
+                    ]}
+                  >
+                    {getLineFilterLabel(filter, t)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
                 <Text
@@ -132,11 +194,14 @@ export default function StationsScreen() {
               {isLoading ? <Text style={styles.loadingText}>{t("stations.loading")}</Text> : null}
               {hasError ? <Text style={styles.errorText}>{t("stations.error")}</Text> : null}
             </View>
-            <Text style={styles.resultCount}>{t("stations.results", { count: filteredStations.length })}</Text>
+            <Text style={styles.resultCount}>
+              {t("stations.results", { count: filteredStations.length })}
+            </Text>
           </View>
         }
         renderItem={({ item }) => {
           const lineIds = getStationLineIds(item);
+          const aliases = getStationAliases(item);
 
           return (
             <Link
@@ -156,7 +221,11 @@ export default function StationsScreen() {
               <Pressable style={styles.card}>
                 <View style={styles.stationCopy}>
                   <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.area}>{getStationAreaText(item, t)}</Text>
+                  {aliases.length > 0 ? (
+                    <Text style={styles.aliases}>
+                      {t("stations.knownAs")}: {aliases.join(", ")}
+                    </Text>
+                  ) : null}
                   <View style={styles.badgeRow}>
                     {lineIds.map((lineId) => (
                       <LineBadge key={lineId} lineId={lineId} />
@@ -211,6 +280,33 @@ function createStyles(colors: AppTheme["colors"]) {
       fontSize: typography.small,
       fontWeight: "700",
       textTransform: "uppercase",
+    },
+    filterRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+    },
+    filterButton: {
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      minHeight: 36,
+      justifyContent: "center",
+      paddingHorizontal: spacing.sm,
+    },
+    filterButtonActive: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    filterButtonText: {
+      color: colors.text,
+      fontSize: typography.caption,
+      fontWeight: "900",
+    },
+    filterButtonTextActive: {
+      color: colors.surface,
     },
     statusPanel: {
       backgroundColor: colors.surface,
@@ -280,10 +376,11 @@ function createStyles(colors: AppTheme["colors"]) {
       fontSize: typography.heading,
       fontWeight: "900",
     },
-    area: {
+    aliases: {
       color: colors.muted,
       fontSize: typography.caption,
       fontWeight: "700",
+      lineHeight: 18,
     },
     badgeRow: {
       flexDirection: "row",
