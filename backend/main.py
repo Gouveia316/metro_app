@@ -1,3 +1,4 @@
+import unicodedata
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
@@ -30,6 +31,19 @@ metro_official_client = MetroOfficialApiClient()
 
 LineStatus = Literal["good_service", "minor_delays", "suspended"]
 AlertSeverity = Literal["info", "warning", "critical"]
+NormalizedLineStatus = Literal["normal", "interrupted", "closed", "disrupted", "unknown"]
+StatusReason = Literal["strike", "closed"]
+ArrivalState = Literal[
+    "arrivals_available",
+    "service_closed",
+    "no_arrivals_available",
+    "no_live_data",
+]
+ArrivalEmptyReason = Literal[
+    "strike",
+    "all_arrivals_unavailable",
+    "station_not_found_in_wait_times",
+]
 
 
 class Line(BaseModel):
@@ -61,6 +75,89 @@ class Alert(BaseModel):
     title: str
     message: str
     affected_lines: list[str]
+
+
+class NormalizedLineRaw(BaseModel):
+    shortStatus: str | None
+    message: str | None
+    messageType: str | None
+
+
+class NormalizedLine(BaseModel):
+    id: str
+    namePt: str
+    nameEn: str
+    color: str
+    status: NormalizedLineStatus
+    statusReason: StatusReason | None
+    message: str
+    raw: NormalizedLineRaw
+
+
+class NormalizedLinesResponse(BaseModel):
+    source: str
+    updatedAt: str
+    lines: list[NormalizedLine]
+
+
+class NormalizedStationRaw(BaseModel):
+    stop_url: str | None
+    linha: str | None
+
+
+class NormalizedStation(BaseModel):
+    id: str
+    name: str
+    latitude: float | None
+    longitude: float | None
+    lineIds: list[str]
+    zone: str | None
+    raw: NormalizedStationRaw
+
+
+class NormalizedStationsResponse(BaseModel):
+    source: str
+    updatedAt: str
+    stations: list[NormalizedStation]
+
+
+class NormalizedArrival(BaseModel):
+    trainId: str
+    minutes: int
+
+
+class NormalizedPlatformArrivals(BaseModel):
+    id: str
+    destinationCode: str | None
+    destinationName: str | None
+    outOfService: bool
+    rawTimestamp: str | None
+    arrivals: list[NormalizedArrival]
+
+
+class NormalizedStationArrivalsResponse(BaseModel):
+    source: str
+    updatedAt: str
+    stationId: str
+    state: ArrivalState
+    emptyReason: ArrivalEmptyReason | None
+    platforms: list[NormalizedPlatformArrivals]
+
+
+class NormalizedWaitTime(BaseModel):
+    stationId: str
+    platformId: str
+    destinationCode: str | None
+    destinationName: str | None
+    outOfService: bool
+    rawTimestamp: str | None
+    arrivals: list[NormalizedArrival]
+
+
+class NormalizedWaitTimesResponse(BaseModel):
+    source: str
+    updatedAt: str
+    waitTimes: list[NormalizedWaitTime]
 
 
 LINES: list[Line] = [
@@ -152,6 +249,326 @@ ALERTS: list[Alert] = [
 ]
 
 
+LINE_METADATA = {
+    "azul": {
+        "id": "blue",
+        "namePt": "Linha Azul",
+        "nameEn": "Blue Line",
+        "color": "#0072CE",
+        "short_key": "azul_curta",
+        "message_key": "azul",
+        "message_type_key": "tipo_msg_az",
+    },
+    "amarela": {
+        "id": "yellow",
+        "namePt": "Linha Amarela",
+        "nameEn": "Yellow Line",
+        "color": "#FFD200",
+        "short_key": "amarela_curta",
+        "message_key": "amarela",
+        "message_type_key": "tipo_msg_am",
+    },
+    "verde": {
+        "id": "green",
+        "namePt": "Linha Verde",
+        "nameEn": "Green Line",
+        "color": "#00843D",
+        "short_key": "verde_curta",
+        "message_key": "verde",
+        "message_type_key": "tipo_msg_vd",
+    },
+    "vermelha": {
+        "id": "red",
+        "namePt": "Linha Vermelha",
+        "nameEn": "Red Line",
+        "color": "#E30613",
+        "short_key": "vermelha_curta",
+        "message_key": "vermelha",
+        "message_type_key": "tipo_msg_vm",
+    },
+}
+
+OFFICIAL_LINE_NAME_TO_ID = {
+    "azul": "blue",
+    "amarela": "yellow",
+    "verde": "green",
+    "vermelha": "red",
+}
+
+
+def normalize_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    normalized = unicodedata.normalize("NFD", text.strip().lower())
+    without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return without_accents.replace("ã§", "c").replace("a§", "c")
+
+
+def trim_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    trimmed = str(value).strip()
+    return trimmed or None
+
+
+def parse_float(value: Any) -> float | None:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_arrival_minutes(value: Any) -> int | None:
+    arrival_text = "" if value is None else str(value).strip()
+
+    if not arrival_text or arrival_text == "--" or not arrival_text.isdigit():
+        return None
+
+    return int(arrival_text)
+
+
+def parse_station_line_ids(value: Any) -> list[str]:
+    line_text = "" if value is None else str(value)
+
+    return [
+        line_id
+        for line_id in (
+            OFFICIAL_LINE_NAME_TO_ID.get(normalize_text(line_name))
+            for line_name in line_text.strip("[]").split(",")
+        )
+        if line_id
+    ]
+
+
+def official_response_data(response: dict[str, Any]) -> Any:
+    data = response.get("data")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Official Metro API response was not an object")
+
+    if str(data.get("codigo")) != "200":
+        raise HTTPException(
+            status_code=502,
+            detail=f"Official Metro API returned code {data.get('codigo')}",
+        )
+
+    return data.get("resposta")
+
+
+def normalize_line_status(short_status: Any, message: Any) -> NormalizedLineStatus:
+    normalized_status = normalize_text(short_status)
+    normalized_message = normalize_text(message)
+    combined_text = f"{normalized_status} {normalized_message}".strip()
+
+    if not normalized_status:
+        return "unknown"
+
+    if normalized_status == "interrompida":
+        return "interrupted"
+
+    if (
+        "servico encerrado" in normalized_status
+        or "encerrado" in normalized_status
+        or "greve" in combined_text
+    ):
+        return "closed"
+
+    if normalized_status in {"normal", "ok"}:
+        return "normal"
+
+    if (
+        "condicionada" in normalized_status
+        or "perturbada" in normalized_status
+        or "atrasos" in normalized_status
+    ):
+        return "disrupted"
+
+    return "disrupted"
+
+
+def get_line_status_reason(
+    status: NormalizedLineStatus,
+    short_status: Any,
+    message: Any,
+) -> StatusReason | None:
+    combined_text = f"{normalize_text(short_status)} {normalize_text(message)}"
+
+    if "greve" in combined_text:
+        return "strike"
+
+    if status == "closed":
+        return "closed"
+
+    return None
+
+
+def normalize_lines_response(response: dict[str, Any]) -> NormalizedLinesResponse:
+    official_lines = official_response_data(response)
+
+    if not isinstance(official_lines, dict):
+        raise HTTPException(status_code=502, detail="Official Metro line status payload was not an object")
+
+    lines_response: list[NormalizedLine] = []
+
+    for metadata in LINE_METADATA.values():
+        short_status = trim_or_none(official_lines.get(metadata["short_key"]))
+        message = trim_or_none(official_lines.get(metadata["message_key"])) or ""
+        message_type = trim_or_none(official_lines.get(metadata["message_type_key"]))
+        status = normalize_line_status(short_status, message)
+
+        lines_response.append(
+            NormalizedLine(
+                id=metadata["id"],
+                namePt=metadata["namePt"],
+                nameEn=metadata["nameEn"],
+                color=metadata["color"],
+                status=status,
+                statusReason=get_line_status_reason(status, short_status, message),
+                message=message,
+                raw=NormalizedLineRaw(
+                    shortStatus=short_status,
+                    message=trim_or_none(official_lines.get(metadata["message_key"])),
+                    messageType=message_type,
+                ),
+            )
+        )
+
+    return NormalizedLinesResponse(
+        source=response["source"],
+        updatedAt=response["updatedAt"],
+        lines=lines_response,
+    )
+
+
+def normalize_stations_response(response: dict[str, Any]) -> NormalizedStationsResponse:
+    official_stations = official_response_data(response)
+
+    if not isinstance(official_stations, list):
+        raise HTTPException(status_code=502, detail="Official Metro stations payload was not a list")
+
+    stations_response: list[NormalizedStation] = []
+
+    for station in official_stations:
+        if not isinstance(station, dict):
+            continue
+
+        station_id = trim_or_none(station.get("stop_id"))
+        station_name = trim_or_none(station.get("stop_name"))
+
+        if not station_id or not station_name:
+            continue
+
+        stations_response.append(
+            NormalizedStation(
+                id=station_id,
+                name=station_name,
+                latitude=parse_float(station.get("stop_lat")),
+                longitude=parse_float(station.get("stop_lon")),
+                lineIds=parse_station_line_ids(station.get("linha")),
+                zone=trim_or_none(station.get("zone_id")),
+                raw=NormalizedStationRaw(
+                    stop_url=trim_or_none(station.get("stop_url")),
+                    linha=trim_or_none(station.get("linha")),
+                ),
+            )
+        )
+
+    return NormalizedStationsResponse(
+        source=response["source"],
+        updatedAt=response["updatedAt"],
+        stations=stations_response,
+    )
+
+
+def normalize_wait_time_row(row: dict[str, Any]) -> NormalizedWaitTime | None:
+    station_id = trim_or_none(row.get("stop_id"))
+    platform_id = trim_or_none(row.get("cais"))
+
+    if not station_id or not platform_id:
+        return None
+
+    arrivals: list[NormalizedArrival] = []
+
+    for train_key, time_key in (
+        ("comboio", "tempoChegada1"),
+        ("comboio2", "tempoChegada2"),
+        ("comboio3", "tempoChegada3"),
+    ):
+        minutes = parse_arrival_minutes(row.get(time_key))
+
+        if minutes is None:
+            continue
+
+        arrivals.append(
+            NormalizedArrival(
+                trainId=trim_or_none(row.get(train_key)) or "-",
+                minutes=minutes,
+            )
+        )
+
+    return NormalizedWaitTime(
+        stationId=station_id,
+        platformId=platform_id,
+        destinationCode=trim_or_none(row.get("destino")),
+        destinationName=None,
+        outOfService=trim_or_none(row.get("sairServico")) == "1",
+        rawTimestamp=trim_or_none(row.get("hora")),
+        arrivals=arrivals,
+    )
+
+
+def normalize_wait_times_response(response: dict[str, Any]) -> NormalizedWaitTimesResponse:
+    official_wait_times = official_response_data(response)
+
+    if not isinstance(official_wait_times, list):
+        raise HTTPException(status_code=502, detail="Official Metro wait-times payload was not a list")
+
+    wait_times = [
+        normalized_wait_time
+        for normalized_wait_time in (
+            normalize_wait_time_row(row)
+            for row in official_wait_times
+            if isinstance(row, dict)
+        )
+        if normalized_wait_time
+    ]
+
+    return NormalizedWaitTimesResponse(
+        source=response["source"],
+        updatedAt=response["updatedAt"],
+        waitTimes=wait_times,
+    )
+
+
+def group_station_platforms(wait_times: list[NormalizedWaitTime]) -> list[NormalizedPlatformArrivals]:
+    platforms_by_id: dict[str, NormalizedPlatformArrivals] = {}
+
+    for wait_time in wait_times:
+        platform = platforms_by_id.get(wait_time.platformId)
+
+        if platform is None:
+            platform = NormalizedPlatformArrivals(
+                id=wait_time.platformId,
+                destinationCode=wait_time.destinationCode,
+                destinationName=wait_time.destinationName,
+                outOfService=wait_time.outOfService,
+                rawTimestamp=wait_time.rawTimestamp,
+                arrivals=[],
+            )
+            platforms_by_id[wait_time.platformId] = platform
+
+        platform.arrivals = (platform.arrivals + wait_time.arrivals)[:3]
+
+    return list(platforms_by_id.values())
+
+
+def all_service_closed_due_to_strike(lines_response: NormalizedLinesResponse) -> bool:
+    return bool(lines_response.lines) and all(
+        line.status == "closed" and line.statusReason == "strike"
+        for line in lines_response.lines
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -215,3 +632,50 @@ def get_official_stations() -> dict[str, Any]:
 @app.get("/metro/official/wait-times")
 def get_official_wait_times() -> dict[str, Any]:
     return get_official_metro_response("wait-times")
+
+
+@app.get("/metro/lines/status", response_model=NormalizedLinesResponse)
+def get_normalized_line_status() -> NormalizedLinesResponse:
+    return normalize_lines_response(get_official_metro_response("lines"))
+
+
+@app.get("/metro/stations", response_model=NormalizedStationsResponse)
+def get_normalized_stations() -> NormalizedStationsResponse:
+    return normalize_stations_response(get_official_metro_response("stations"))
+
+
+@app.get("/metro/wait-times", response_model=NormalizedWaitTimesResponse)
+def get_normalized_wait_times() -> NormalizedWaitTimesResponse:
+    return normalize_wait_times_response(get_official_metro_response("wait-times"))
+
+
+@app.get("/metro/stations/{station_id}/arrivals", response_model=NormalizedStationArrivalsResponse)
+def get_normalized_station_arrivals(station_id: str) -> NormalizedStationArrivalsResponse:
+    wait_times_response = normalize_wait_times_response(get_official_metro_response("wait-times"))
+    lines_response = normalize_lines_response(get_official_metro_response("lines"))
+    station_wait_times = [
+        wait_time for wait_time in wait_times_response.waitTimes if wait_time.stationId == station_id
+    ]
+    platforms = group_station_platforms(station_wait_times)
+
+    if all_service_closed_due_to_strike(lines_response):
+        state: ArrivalState = "service_closed"
+        empty_reason: ArrivalEmptyReason | None = "strike"
+    elif not station_wait_times:
+        state = "no_live_data"
+        empty_reason = "station_not_found_in_wait_times"
+    elif any(platform.arrivals for platform in platforms):
+        state = "arrivals_available"
+        empty_reason = None
+    else:
+        state = "no_arrivals_available"
+        empty_reason = "all_arrivals_unavailable"
+
+    return NormalizedStationArrivalsResponse(
+        source=wait_times_response.source,
+        updatedAt=wait_times_response.updatedAt,
+        stationId=station_id,
+        state=state,
+        emptyReason=empty_reason,
+        platforms=platforms,
+    )

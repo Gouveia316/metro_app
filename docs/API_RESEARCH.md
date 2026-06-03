@@ -34,3 +34,11 @@ Use `backend/.env.example` as a local setup template. Real credentials belong on
 ## Mobile Safety Rule
 
 Metro API credentials and OAuth access tokens must never be stored in the mobile app. The mobile app should call this backend, and the backend should be the only layer that knows how to request and renew official Metro Lisboa API tokens.
+
+## Backend Response Layers
+
+The `/metro/official/*` endpoints are raw/debug proxy endpoints. They preserve the official Metro API payload shape under the backend wrapper so developers can inspect the source API behavior while keeping OAuth credentials server-side.
+
+The normalized `/metro/*` endpoints are intended for the mobile app. These endpoints convert official Metro API protocol details into stable app-native response shapes, including line IDs, line status values, station coordinates, station line IDs, platform arrivals, and explicit empty states. Mobile clients should eventually consume these normalized responses and avoid official API cleanup logic.
+
+Destination code mapping is intentionally unresolved for now. Normalized arrival responses expose `destinationCode` and set `destinationName` to `null` until a reliable official mapping is added.
