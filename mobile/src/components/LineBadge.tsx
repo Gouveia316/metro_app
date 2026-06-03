@@ -6,23 +6,34 @@ import { radius, spacing, typography } from "@/styles/theme";
 
 type Props = {
   lineId: string;
+  variant?: "compact" | "full";
 };
 
-export function LineBadge({ lineId }: Props) {
-  const { t, theme } = useAppPreferences();
-  const { colors } = theme;
+export function LineBadge({ lineId, variant = "compact" }: Props) {
+  const { t } = useAppPreferences();
   const line = lineById[lineId];
 
   if (!line) {
     return null;
   }
 
+  const isYellowLine = line.id === "yellow";
+  const labelColor = isYellowLine ? "#17212B" : "#FFFFFF";
+  const fullLabel = t(line.nameKey);
+  const label = variant === "full" ? fullLabel : fullLabel.replace(" Line", "").replace("Linha ", "");
+
   return (
-    <View style={[styles.badge, { backgroundColor: colors.surfaceRaised, borderColor: line.color }]}>
-      <View style={[styles.dot, { backgroundColor: line.color }]} />
-      <Text style={[styles.label, { color: colors.text }]}>
-        {t(line.nameKey).replace(" Line", "").replace("Linha ", "")}
-      </Text>
+    <View
+      style={[
+        styles.badge,
+        {
+          backgroundColor: line.color,
+          borderColor: isYellowLine ? "#C8A600" : line.color,
+        },
+      ]}
+    >
+      <View style={[styles.marker, { backgroundColor: labelColor }]} />
+      <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
     </View>
   );
 }
@@ -32,19 +43,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     alignSelf: "flex-start",
     borderRadius: 999,
-    borderWidth: 1,
+    borderWidth: 1.5,
     flexDirection: "row",
-    gap: spacing.xs,
+    gap: spacing.xxs,
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xxs,
+    paddingVertical: spacing.xs,
   },
-  dot: {
+  marker: {
     borderRadius: 999,
-    height: 9,
-    width: 9,
+    height: 6,
+    opacity: 0.9,
+    width: 6,
   },
   label: {
     fontSize: typography.caption,
     fontWeight: "900",
+    lineHeight: 16,
   },
 });

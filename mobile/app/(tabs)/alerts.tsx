@@ -67,7 +67,7 @@ export default function AlertsScreen() {
               <Text style={styles.message}>{t(item.messageKey)}</Text>
               <View style={styles.badgeRow}>
                 {item.affectedLines.map((lineId) => (
-                  <LineBadge key={lineId} lineId={lineId} />
+                  <LineBadge key={lineId} lineId={lineId} variant="full" />
                 ))}
               </View>
             </View>

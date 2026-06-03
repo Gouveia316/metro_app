@@ -319,26 +319,32 @@ export default function StationsScreen() {
               style={styles.input}
             />
             <View style={styles.filterRow}>
-              {lineFilters.map((filter) => (
-                <Pressable
-                  key={filter}
-                  accessibilityRole="button"
-                  onPress={() => setActiveLineFilter(filter)}
-                  style={[
-                    styles.filterButton,
-                    activeLineFilter === filter && styles.filterButtonActive,
-                  ]}
-                >
-                  <Text
+              {lineFilters.map((filter) => {
+                const isActive = activeLineFilter === filter;
+                const filterColor = filter === "all" ? theme.colors.accent : lineById[filter].color;
+                const activeTextColor = filter === "yellow" ? theme.colors.text : theme.colors.surface;
+                const markerColor = isActive && filter !== "yellow" ? activeTextColor : filterColor;
+
+                return (
+                  <Pressable
+                    key={filter}
+                    accessibilityRole="button"
+                    onPress={() => setActiveLineFilter(filter)}
                     style={[
-                      styles.filterButtonText,
-                      activeLineFilter === filter && styles.filterButtonTextActive,
+                      styles.filterButton,
+                      {
+                        backgroundColor: isActive ? filterColor : theme.colors.surfaceRaised,
+                        borderColor: isActive || filter !== "all" ? filterColor : theme.colors.border,
+                      },
                     ]}
                   >
-                    {getLineFilterLabel(filter, t)}
-                  </Text>
-                </Pressable>
-              ))}
+                    <View style={[styles.filterMarker, { backgroundColor: markerColor }]} />
+                    <Text style={[styles.filterButtonText, { color: isActive ? activeTextColor : theme.colors.text }]}>
+                      {getLineFilterLabel(filter, t)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
@@ -462,25 +468,22 @@ function createStyles(colors: AppTheme["colors"]) {
     },
     filterButton: {
       alignItems: "center",
-      backgroundColor: colors.surfaceRaised,
-      borderColor: colors.border,
       borderRadius: 999,
       borderWidth: 1,
+      flexDirection: "row",
+      gap: spacing.xs,
       minHeight: 36,
       justifyContent: "center",
       paddingHorizontal: spacing.sm,
     },
-    filterButtonActive: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
+    filterMarker: {
+      borderRadius: 999,
+      height: 8,
+      width: 8,
     },
     filterButtonText: {
-      color: colors.text,
       fontSize: typography.caption,
       fontWeight: "900",
-    },
-    filterButtonTextActive: {
-      color: colors.surface,
     },
     statusPanel: {
       backgroundColor: colors.surface,

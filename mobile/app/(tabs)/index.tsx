@@ -14,6 +14,7 @@ import { Screen } from "@/components/Screen";
 import {
   arrivalsByStation,
   getStationLineIds,
+  lineById,
   lines as fallbackLines,
   stations as fallbackStations,
 } from "@/data/mockData";
@@ -67,6 +68,19 @@ const emptyArrivalPreview: ArrivalPreviewState = {
   items: [],
   state: null,
   updatedAt: null,
+};
+
+// Local development visual preview override for the nearest-station card. Keep null for normal use.
+const DEBUG_NEAREST_STATION_ID: string | null = null;
+
+const DEBUG_NEAREST_STATIONS: Record<string, Station> = {
+  AM: { id: "AM", name: "Alameda", lineIds: ["green", "red"], lines: ["green", "red"] },
+  AP: { id: "AP", name: "Aeroporto", lineIds: ["red"], lines: ["red"] },
+  BC: { id: "BC", name: "Baixa/Chiado", lineIds: ["blue", "green"], lines: ["blue", "green"] },
+  CG: { id: "CG", name: "Campo Grande", lineIds: ["yellow", "green"], lines: ["yellow", "green"] },
+  JZ: { id: "JZ", name: "Jardim Zoológico", lineIds: ["blue"], lines: ["blue"] },
+  SA: { id: "SA", name: "Saldanha", lineIds: ["yellow", "red"], lines: ["yellow", "red"] },
+  SS: { id: "SS", name: "São Sebastião", lineIds: ["blue", "red"], lines: ["blue", "red"] },
 };
 
 function getHomeStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
@@ -241,6 +255,30 @@ function getStationRouteParams(station: Station) {
   };
 }
 
+function getStationAccentColors(station: Station | undefined, fallbackColor: string) {
+  if (!station) {
+    return [fallbackColor];
+  }
+
+  const lineColors = getStationLineIds(station)
+    .map((lineId) => lineById[lineId]?.color)
+    .filter((lineColor): lineColor is string => Boolean(lineColor));
+
+  return lineColors.length > 0 ? lineColors : [fallbackColor];
+}
+
+function getDebugNearestStation(distanceMeters = 0): NearestStation | undefined {
+  if (!DEBUG_NEAREST_STATION_ID) {
+    return undefined;
+  }
+
+  const station =
+    DEBUG_NEAREST_STATIONS[DEBUG_NEAREST_STATION_ID] ??
+    fallbackStations.find((fallbackStation) => fallbackStation.id === DEBUG_NEAREST_STATION_ID);
+
+  return station ? { ...station, distanceMeters } : undefined;
+}
+
 function getNearestStationMessageKey(status: ReturnType<typeof useNearestStations>["status"]): TranslationKey {
   if (status === "loading") {
     return "home.findingYourLocation";
@@ -283,6 +321,20 @@ function getArrivalEmptyMessage(preview: ArrivalPreviewState, t: Translate) {
   }
 
   return t("home.noArrivalsAvailable");
+}
+
+function getLocalArrivalPreview(station?: Station): ArrivalPreviewState {
+  const items = mapMockArrivalPreview(getMockArrivalsForStation(station));
+
+  return {
+    dataMode: items.length > 0 ? "mocked" : null,
+    emptyReason: null,
+    hasError: false,
+    isLoading: false,
+    items,
+    state: null,
+    updatedAt: null,
+  };
 }
 
 function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
@@ -353,7 +405,6 @@ function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
 export default function HomeScreen() {
   const { language, setLanguage, t, theme, themeName, toggleTheme } = useAppPreferences();
   const {
-    clearFavoriteStation,
     error: favoriteError,
     favoriteStationId,
     isLoading: isFavoriteLoading,
@@ -375,7 +426,13 @@ export default function HomeScreen() {
     ? favoriteStationOptions.find((station) => station.id === favoriteStationId)
     : undefined;
   const serviceSummary = getServiceSummary(t, displayLines);
-  const nearestArrivalPreview = useStationArrivalPreview(nearestStation);
+  const debugNearestStation = getDebugNearestStation(nearestStation?.distanceMeters);
+  const displayedNearestStation = debugNearestStation ?? nearestStation;
+  const displayedNearestStationStatus = debugNearestStation ? "success" : nearestStationStatus;
+  const liveNearestArrivalPreview = useStationArrivalPreview(debugNearestStation ? undefined : nearestStation);
+  const nearestArrivalPreview = debugNearestStation
+    ? getLocalArrivalPreview(debugNearestStation)
+    : liveNearestArrivalPreview;
   const favoriteArrivalPreview = useStationArrivalPreview(resolvedFavoriteStation);
 
   const loadOfficialLines = useCallback(async () => {
@@ -457,9 +514,10 @@ export default function HomeScreen() {
       <View style={styles.mainStack}>
         <NearestStationPanel
           arrivalPreview={nearestArrivalPreview}
-          nearestStation={nearestStation}
+          colors={theme.colors}
+          nearestStation={displayedNearestStation}
           onFindNearestStation={findNearestStations}
-          status={nearestStationStatus}
+          status={displayedNearestStationStatus}
           styles={styles}
           t={t}
         />
@@ -470,7 +528,6 @@ export default function HomeScreen() {
           favoriteStationId={favoriteStationId}
           hasStorageError={Boolean(favoriteError)}
           isLoading={isFavoriteLoading || isFavoriteStationLoading}
-          onClearFavoriteStation={clearFavoriteStation}
           styles={styles}
           t={t}
         />
@@ -485,18 +542,20 @@ export default function HomeScreen() {
         updatedAt={lineUpdatedAt}
       />
 
+      {!favoriteStationId ? <SaveFavoriteStationAction styles={styles} t={t} /> : null}
+
       <View style={styles.controlsCard}>
         <PreferenceRow label={t("app.language")} styles={styles}>
-          <SegmentButton
-            active={language === "en"}
-            label={t("app.language.en")}
-            onPress={() => setLanguage("en")}
-            styles={styles}
-          />
           <SegmentButton
             active={language === "pt"}
             label={t("app.language.pt")}
             onPress={() => setLanguage("pt")}
+            styles={styles}
+          />
+          <SegmentButton
+            active={language === "en"}
+            label={t("app.language.en")}
+            onPress={() => setLanguage("en")}
             styles={styles}
           />
         </PreferenceRow>
@@ -541,6 +600,7 @@ function CriticalServiceAlert({
 
 function NearestStationPanel({
   arrivalPreview,
+  colors,
   nearestStation,
   onFindNearestStation,
   status,
@@ -548,6 +608,7 @@ function NearestStationPanel({
   t,
 }: {
   arrivalPreview: ArrivalPreviewState;
+  colors: AppTheme["colors"];
   nearestStation?: NearestStation;
   onFindNearestStation: () => void;
   status: ReturnType<typeof useNearestStations>["status"];
@@ -556,9 +617,11 @@ function NearestStationPanel({
 }) {
   const isLoading = status === "loading";
   const hasNearestStation = status === "success" && nearestStation;
+  const accentColors = getStationAccentColors(hasNearestStation ? nearestStation : undefined, colors.accent);
 
   return (
     <View style={styles.heroPanel}>
+      <SegmentedLineAccent lineColors={accentColors} styles={styles} />
       <View style={styles.panelHeader}>
         <Text style={styles.sectionTitle}>{t("home.nearestStation")}</Text>
         {hasNearestStation ? (
@@ -612,13 +675,28 @@ function NearestStationPanel({
   );
 }
 
+function SegmentedLineAccent({
+  lineColors,
+  styles,
+}: {
+  lineColors: string[];
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <View style={styles.stationAccentBar}>
+      {lineColors.map((lineColor, index) => (
+        <View key={`${lineColor}-${index}`} style={[styles.stationAccentSegment, { backgroundColor: lineColor }]} />
+      ))}
+    </View>
+  );
+}
+
 function FavoriteStationPanel({
   arrivalPreview,
   favoriteStation,
   favoriteStationId,
   hasStorageError,
   isLoading,
-  onClearFavoriteStation,
   styles,
   t,
 }: {
@@ -627,13 +705,16 @@ function FavoriteStationPanel({
   favoriteStationId: string | null;
   hasStorageError: boolean;
   isLoading: boolean;
-  onClearFavoriteStation: () => void;
   styles: ReturnType<typeof createStyles>;
   t: Translate;
 }) {
+  if (!favoriteStationId) {
+    return null;
+  }
+
   if (isLoading) {
     return (
-      <View style={styles.panel}>
+      <View style={styles.compactNotice}>
         <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
         <Text style={styles.stateText}>{t("stations.loading")}</Text>
       </View>
@@ -642,41 +723,18 @@ function FavoriteStationPanel({
 
   if (hasStorageError) {
     return (
-      <View style={styles.panel}>
+      <View style={styles.compactNotice}>
         <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
         <Text style={styles.stateText}>{t("home.favoriteStationLoadError")}</Text>
       </View>
     );
   }
 
-  if (!favoriteStationId) {
-    return (
-      <View style={styles.panel}>
-        <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
-        <Text style={styles.stateText}>{t("home.noFavoriteStationYet")}</Text>
-        <Link href="/stations" asChild>
-          <Pressable style={styles.secondaryStrongButton}>
-            <Text style={styles.secondaryStrongButtonText}>{t("home.chooseStation")}</Text>
-          </Pressable>
-        </Link>
-      </View>
-    );
-  }
-
   if (!favoriteStation) {
     return (
-      <View style={styles.panel}>
+      <View style={styles.compactNotice}>
         <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
         <Text style={styles.stateText}>{t("home.favoriteStationUnavailable")}</Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => {
-            void onClearFavoriteStation();
-          }}
-          style={styles.secondaryButton}
-        >
-          <Text style={styles.secondaryButtonText}>{t("home.clearFavorite")}</Text>
-        </Pressable>
       </View>
     );
   }
@@ -712,6 +770,22 @@ function FavoriteStationPanel({
         </Pressable>
       </Link>
     </View>
+  );
+}
+
+function SaveFavoriteStationAction({
+  styles,
+  t,
+}: {
+  styles: ReturnType<typeof createStyles>;
+  t: Translate;
+}) {
+  return (
+    <Link href="/stations" asChild>
+      <Pressable style={styles.saveFavoriteAction}>
+        <Text style={styles.saveFavoriteActionText}>{t("home.saveFavoriteStation")}</Text>
+      </Pressable>
+    </Link>
   );
 }
 
@@ -803,7 +877,7 @@ function LineSummary({
           <View key={line.id} style={styles.lineChip}>
             <View style={[styles.lineChipStripe, { backgroundColor: line.color }]} />
             <View style={styles.lineChipCopy}>
-              <Text style={styles.lineChipName}>{t(line.nameKey).replace(" Line", "").replace("Linha ", "")}</Text>
+              <Text style={styles.lineChipName}>{t(line.nameKey)}</Text>
               <Text style={[styles.lineChipStatus, getHomeStatusStyles(line.status, colors)]}>
                 {t(line.statusLabelKey)}
               </Text>
@@ -935,16 +1009,31 @@ function createStyles(colors: AppTheme["colors"]) {
     },
     heroPanel: {
       backgroundColor: colors.surface,
-      borderColor: colors.accent,
+      borderColor: colors.border,
       borderRadius: radius.xl,
-      borderWidth: 2,
+      borderWidth: 1,
       gap: spacing.md,
+      overflow: "hidden",
       padding: spacing.lg,
+      paddingLeft: spacing.lg + spacing.sm,
+      position: "relative",
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.04,
       shadowRadius: 10,
       elevation: 1,
+    },
+    stationAccentBar: {
+      bottom: 0,
+      flexDirection: "column",
+      left: 0,
+      overflow: "hidden",
+      position: "absolute",
+      top: 0,
+      width: 8,
+    },
+    stationAccentSegment: {
+      flex: 1,
     },
     panel: {
       backgroundColor: colors.surface,
@@ -952,6 +1041,14 @@ function createStyles(colors: AppTheme["colors"]) {
       borderRadius: radius.lg,
       borderWidth: 1,
       gap: spacing.md,
+      padding: spacing.md,
+    },
+    compactNotice: {
+      backgroundColor: colors.surfaceRaised,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      gap: spacing.xs,
       padding: spacing.md,
     },
     panelHeader: {
@@ -1103,6 +1200,11 @@ function createStyles(colors: AppTheme["colors"]) {
       minHeight: 48,
       justifyContent: "center",
       paddingHorizontal: spacing.md,
+      shadowColor: colors.accent,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18,
+      shadowRadius: 8,
+      elevation: 2,
     },
     primaryButtonDisabled: {
       opacity: 0.7,
@@ -1140,6 +1242,23 @@ function createStyles(colors: AppTheme["colors"]) {
     secondaryStrongButtonText: {
       color: colors.accent,
       fontSize: typography.body,
+      fontWeight: "900",
+    },
+    saveFavoriteAction: {
+      alignItems: "center",
+      alignSelf: "stretch",
+      backgroundColor: colors.surfaceRaised,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      justifyContent: "center",
+      marginBottom: spacing.md,
+      minHeight: 44,
+      paddingHorizontal: spacing.md,
+    },
+    saveFavoriteActionText: {
+      color: colors.accent,
+      fontSize: typography.caption,
       fontWeight: "900",
     },
     inlineButton: {
