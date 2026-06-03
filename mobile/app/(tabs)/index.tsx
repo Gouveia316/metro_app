@@ -1,10 +1,14 @@
-import { Link } from "expo-router";
+import { Link, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { fetchOfficialStations } from "@/api/client";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { alerts, getStationLineIds, lines, stations } from "@/data/mockData";
+import type { Station } from "@/data/mockData";
+import { useFavoriteStation } from "@/favorites/useFavoriteStation";
 import type { TranslationKey } from "@/i18n/translations";
 import { useNearestStations } from "@/location/useNearestStations";
 import type { NearestStation } from "@/location/useNearestStations";
@@ -12,7 +16,6 @@ import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
 
-const favoriteStation = stations[0];
 const delayedLines = lines.filter((line) => line.status !== "good_service");
 const goodServiceCount = lines.length - delayedLines.length;
 const urgentAlerts = alerts.filter((alert) => alert.severity !== "info").length;
@@ -21,11 +24,62 @@ type Translate = ReturnType<typeof useAppPreferences>["t"];
 
 export default function HomeScreen() {
   const { language, setLanguage, t, theme, themeName, toggleTheme } = useAppPreferences();
+  const {
+    clearFavoriteStation,
+    error: favoriteError,
+    favoriteStationId,
+    isLoading: isFavoriteLoading,
+    reloadFavoriteStation,
+  } = useFavoriteStation();
   const { findNearestStations, nearestStation, status: nearestStationStatus } = useNearestStations();
+  const [favoriteStationOptions, setFavoriteStationOptions] = useState<Station[]>(stations);
+  const [isFavoriteStationLoading, setIsFavoriteStationLoading] = useState(false);
   const styles = createStyles(theme.colors);
-  const favoriteStationArea = favoriteStation.areaKey
-    ? t(favoriteStation.areaKey)
-    : t("stations.zoneUnknown");
+  const resolvedFavoriteStation = favoriteStationId
+    ? favoriteStationOptions.find((station) => station.id === favoriteStationId)
+    : undefined;
+
+  useFocusEffect(
+    useCallback(() => {
+      void reloadFavoriteStation();
+    }, [reloadFavoriteStation]),
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadFavoriteStationOptions() {
+      if (!favoriteStationId) {
+        setFavoriteStationOptions(stations);
+        setIsFavoriteStationLoading(false);
+        return;
+      }
+
+      setIsFavoriteStationLoading(true);
+
+      try {
+        const result = await fetchOfficialStations();
+
+        if (isMounted) {
+          setFavoriteStationOptions(result.stations);
+        }
+      } catch {
+        if (isMounted) {
+          setFavoriteStationOptions(stations);
+        }
+      } finally {
+        if (isMounted) {
+          setIsFavoriteStationLoading(false);
+        }
+      }
+    }
+
+    void loadFavoriteStationOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [favoriteStationId]);
 
   return (
     <Screen scroll>
@@ -85,28 +139,15 @@ export default function HomeScreen() {
         t={t}
       />
 
-      <View style={styles.panel}>
-        <View style={styles.panelHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
-            <Text style={styles.stationName}>{favoriteStation.name}</Text>
-            <Text style={styles.stationArea}>{favoriteStationArea}</Text>
-          </View>
-          <View style={styles.favoriteMark}>
-            <Text style={styles.favoriteMarkText}>{t("home.saved")}</Text>
-          </View>
-        </View>
-        <View style={styles.badgeRow}>
-          {getStationLineIds(favoriteStation).map((lineId) => (
-            <LineBadge key={lineId} lineId={lineId} />
-          ))}
-        </View>
-        <Link href={{ pathname: "/stations/[stationId]", params: { stationId: favoriteStation.id } }} asChild>
-          <Pressable style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>{t("home.viewNextTrains")}</Text>
-          </Pressable>
-        </Link>
-      </View>
+      <FavoriteStationPanel
+        favoriteStation={resolvedFavoriteStation}
+        favoriteStationId={favoriteStationId}
+        hasStorageError={Boolean(favoriteError)}
+        isLoading={isFavoriteLoading || isFavoriteStationLoading}
+        onClearFavoriteStation={clearFavoriteStation}
+        styles={styles}
+        t={t}
+      />
 
       <View style={styles.panel}>
         <View style={styles.panelHeader}>
@@ -223,6 +264,120 @@ function NearestStationPanel({
           </Pressable>
         </>
       )}
+    </View>
+  );
+}
+
+function FavoriteStationPanel({
+  favoriteStation,
+  favoriteStationId,
+  hasStorageError,
+  isLoading,
+  onClearFavoriteStation,
+  styles,
+  t,
+}: {
+  favoriteStation?: Station;
+  favoriteStationId: string | null;
+  hasStorageError: boolean;
+  isLoading: boolean;
+  onClearFavoriteStation: () => void;
+  styles: ReturnType<typeof createStyles>;
+  t: Translate;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
+        <Text style={styles.stateText}>{t("stations.loading")}</Text>
+      </View>
+    );
+  }
+
+  if (hasStorageError) {
+    return (
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
+        <Text style={styles.stateText}>{t("home.favoriteStationLoadError")}</Text>
+      </View>
+    );
+  }
+
+  if (!favoriteStationId) {
+    return (
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
+        <Text style={styles.stateText}>{t("home.noFavoriteStationYet")}</Text>
+        <Link href="/stations" asChild>
+          <Pressable style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>{t("home.chooseStation")}</Text>
+          </Pressable>
+        </Link>
+      </View>
+    );
+  }
+
+  if (!favoriteStation) {
+    return (
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
+        <Text style={styles.stateText}>{t("home.favoriteStationUnavailable")}</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            void onClearFavoriteStation();
+          }}
+          style={styles.secondaryButton}
+        >
+          <Text style={styles.secondaryButtonText}>{t("home.clearFavorite")}</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.panelHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
+          <Text style={styles.stationName}>{favoriteStation.name}</Text>
+        </View>
+        <View style={styles.favoriteMark}>
+          <Text style={styles.favoriteMarkText}>{t("station.savedAsFavorite")}</Text>
+        </View>
+      </View>
+      <View style={styles.badgeRow}>
+        {getStationLineIds(favoriteStation).map((lineId) => (
+          <LineBadge key={lineId} lineId={lineId} />
+        ))}
+      </View>
+      <Link
+        href={{
+          pathname: "/stations/[stationId]",
+          params: {
+            latitude: favoriteStation.latitude == null ? "" : String(favoriteStation.latitude),
+            lineIds: getStationLineIds(favoriteStation).join(","),
+            longitude: favoriteStation.longitude == null ? "" : String(favoriteStation.longitude),
+            name: favoriteStation.name,
+            stationId: favoriteStation.id,
+            zone: favoriteStation.zone ?? "",
+          },
+        }}
+        asChild
+      >
+        <Pressable style={styles.primaryButton}>
+          <Text style={styles.primaryButtonText}>{t("home.openFavoriteStation")}</Text>
+        </Pressable>
+      </Link>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => {
+          void onClearFavoriteStation();
+        }}
+        style={styles.secondaryButton}
+      >
+        <Text style={styles.secondaryButtonText}>{t("home.clearFavorite")}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -432,6 +587,21 @@ function createStyles(colors: AppTheme["colors"]) {
     primaryButtonText: {
       color: colors.surface,
       fontSize: typography.body,
+      fontWeight: "900",
+    },
+    secondaryButton: {
+      alignItems: "center",
+      backgroundColor: colors.soft,
+      borderColor: colors.border,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      minHeight: 44,
+      justifyContent: "center",
+      paddingHorizontal: spacing.md,
+    },
+    secondaryButtonText: {
+      color: colors.text,
+      fontSize: typography.caption,
       fontWeight: "900",
     },
     privacyNote: {

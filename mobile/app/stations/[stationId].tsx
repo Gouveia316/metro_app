@@ -8,6 +8,7 @@ import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { arrivalsByStation, getStationLineIds, stations } from "@/data/mockData";
 import type { Arrival, Station } from "@/data/mockData";
+import { useFavoriteStation } from "@/favorites/useFavoriteStation";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
@@ -178,6 +179,12 @@ export default function StationDetailScreen() {
   const params = useLocalSearchParams<StationRouteParams>();
   const stationId = getParamValue(params.stationId);
   const { t, theme } = useAppPreferences();
+  const {
+    error: favoriteError,
+    favoriteStationId,
+    isLoading: isFavoriteLoading,
+    saveFavoriteStation,
+  } = useFavoriteStation();
   const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -256,6 +263,7 @@ export default function StationDetailScreen() {
       : groupMockArrivalsByDirection(arrivals, t);
   const hasLivePlatforms = platforms.length > 0;
   const emptyMessage = getEmptyArrivalMessage(dataMode, arrivalState, emptyReason, hasLivePlatforms, t);
+  const isFavoriteStation = favoriteStationId === station.id;
 
   return (
     <Screen>
@@ -276,9 +284,19 @@ export default function StationDetailScreen() {
                 ))}
               </View>
             </View>
-            <Pressable accessibilityRole="button" style={styles.favoriteButton} onPress={() => {}}>
-              <Text style={styles.favoriteButtonText}>{t("station.saveFavorite")}</Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isFavoriteLoading || isFavoriteStation}
+              onPress={() => {
+                void saveFavoriteStation(station.id);
+              }}
+              style={[styles.favoriteButton, isFavoriteStation && styles.favoriteButtonActive]}
+            >
+              <Text style={[styles.favoriteButtonText, isFavoriteStation && styles.favoriteButtonTextActive]}>
+                {isFavoriteStation ? t("station.savedAsFavorite") : t("station.saveFavorite")}
+              </Text>
             </Pressable>
+            {favoriteError ? <Text style={styles.errorText}>{t("home.favoriteStationLoadError")}</Text> : null}
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
                 <Text
@@ -383,10 +401,17 @@ function createStyles(colors: AppTheme["colors"]) {
       justifyContent: "center",
       paddingHorizontal: spacing.md,
     },
+    favoriteButtonActive: {
+      backgroundColor: colors.successSoft,
+      borderColor: colors.success,
+    },
     favoriteButtonText: {
       color: colors.accent,
       fontSize: typography.body,
       fontWeight: "900",
+    },
+    favoriteButtonTextActive: {
+      color: colors.success,
     },
     sectionIntro: {
       color: colors.muted,
