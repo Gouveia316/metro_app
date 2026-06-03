@@ -180,6 +180,7 @@ export default function StationDetailScreen() {
   const stationId = getParamValue(params.stationId);
   const { t, theme } = useAppPreferences();
   const {
+    clearFavoriteStation,
     error: favoriteError,
     favoriteStationId,
     isLoading: isFavoriteLoading,
@@ -285,10 +286,11 @@ export default function StationDetailScreen() {
               </View>
             </View>
             <Pressable
+              accessibilityLabel={isFavoriteStation ? t("station.removeFavorite") : t("station.saveFavorite")}
               accessibilityRole="button"
-              disabled={isFavoriteLoading || isFavoriteStation}
+              disabled={isFavoriteLoading}
               onPress={() => {
-                void saveFavoriteStation(station.id);
+                void (isFavoriteStation ? clearFavoriteStation() : saveFavoriteStation(station.id));
               }}
               style={[styles.favoriteButton, isFavoriteStation && styles.favoriteButtonActive]}
             >
