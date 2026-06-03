@@ -18,7 +18,7 @@ export function LineBadge({ lineId }: Props) {
   }
 
   return (
-    <View style={[styles.badge, { backgroundColor: colors.surface, borderColor: line.color }]}>
+    <View style={[styles.badge, { backgroundColor: colors.surfaceRaised, borderColor: line.color }]}>
       <View style={[styles.dot, { backgroundColor: line.color }]} />
       <Text style={[styles.label, { color: colors.text }]}>
         {t(line.nameKey).replace(" Line", "").replace("Linha ", "")}
@@ -31,12 +31,12 @@ const styles = StyleSheet.create({
   badge: {
     alignItems: "center",
     alignSelf: "flex-start",
-    borderRadius: radius.sm,
+    borderRadius: 999,
     borderWidth: 1,
     flexDirection: "row",
     gap: spacing.xs,
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.xxs,
   },
   dot: {
     borderRadius: 999,
@@ -45,6 +45,6 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: typography.caption,
-    fontWeight: "800",
+    fontWeight: "900",
   },
 });

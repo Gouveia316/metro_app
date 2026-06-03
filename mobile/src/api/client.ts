@@ -176,6 +176,7 @@ function mapNormalizedLines(response: NormalizedLinesResponse): MetroLine[] {
       noteKey: message ? existingLine.noteKey : getFallbackMessageKey(status),
       status,
       statusLabelKey: getStatusLabelKey(status),
+      statusReason: line.statusReason,
     };
   });
 }

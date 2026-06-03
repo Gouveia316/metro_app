@@ -91,6 +91,7 @@ function createStyles(colors: AppTheme["colors"]) {
       color: colors.text,
       fontSize: typography.title,
       fontWeight: "900",
+      lineHeight: 36,
     },
     subtitle: {
       color: colors.muted,
@@ -100,12 +101,17 @@ function createStyles(colors: AppTheme["colors"]) {
     card: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
-      borderRadius: radius.md,
+      borderRadius: radius.lg,
       borderWidth: 1,
-      borderLeftWidth: 5,
+      borderLeftWidth: 6,
       gap: spacing.sm,
       marginBottom: spacing.md,
       padding: spacing.md,
+      shadowColor: colors.shadow,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.05,
+      shadowRadius: 12,
+      elevation: 1,
     },
     cardHeader: {
       alignItems: "center",
@@ -113,7 +119,7 @@ function createStyles(colors: AppTheme["colors"]) {
       justifyContent: "space-between",
     },
     severity: {
-      borderRadius: radius.sm,
+      borderRadius: 999,
       fontSize: typography.small,
       fontWeight: "900",
       overflow: "hidden",
@@ -130,6 +136,7 @@ function createStyles(colors: AppTheme["colors"]) {
       color: colors.text,
       fontSize: typography.heading,
       fontWeight: "900",
+      lineHeight: 25,
     },
     message: {
       color: colors.muted,

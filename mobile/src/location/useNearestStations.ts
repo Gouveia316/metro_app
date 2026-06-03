@@ -52,6 +52,30 @@ function sortStationsByDistance(stations: Station[], userLocation: Location.Loca
 export function useNearestStations() {
   const [state, setState] = useState<NearestStationsState>(initialState);
 
+  const loadNearestStations = useCallback(async (userLocation: Location.LocationObject) => {
+    let stations: Station[];
+
+    try {
+      const result = await fetchOfficialStations();
+      stations = result.stations;
+    } catch (error) {
+      setState({
+        error: error instanceof Error ? error.message : null,
+        stations: [],
+        status: "stations_unavailable",
+      });
+      return;
+    }
+
+    const nearestStations = sortStationsByDistance(stations, userLocation.coords);
+
+    setState({
+      error: null,
+      stations: nearestStations,
+      status: nearestStations.length > 0 ? "success" : "no_station_coordinates",
+    });
+  }, []);
+
   const findNearestStations = useCallback(async () => {
     setState({ error: null, stations: [], status: "loading" });
 
@@ -86,32 +110,49 @@ export function useNearestStations() {
       return;
     }
 
-    let stations: Station[];
+    await loadNearestStations(userLocation);
+  }, [loadNearestStations]);
+
+  const refreshNearestStationsIfGranted = useCallback(async () => {
+    let permission: Location.LocationPermissionResponse;
 
     try {
-      const result = await fetchOfficialStations();
-      stations = result.stations;
+      permission = await Location.getForegroundPermissionsAsync();
+    } catch (error) {
+      setState((currentState) => ({
+        ...currentState,
+        error: error instanceof Error ? error.message : null,
+        status: currentState.status === "idle" ? "idle" : "location_unavailable",
+      }));
+      return;
+    }
+
+    if (permission.status !== "granted") {
+      return;
+    }
+
+    setState({ error: null, stations: [], status: "loading" });
+
+    let userLocation: Location.LocationObject;
+
+    try {
+      userLocation = await Location.getCurrentPositionAsync({});
     } catch (error) {
       setState({
         error: error instanceof Error ? error.message : null,
         stations: [],
-        status: "stations_unavailable",
+        status: "location_unavailable",
       });
       return;
     }
 
-    const nearestStations = sortStationsByDistance(stations, userLocation.coords);
-
-    setState({
-      error: null,
-      stations: nearestStations,
-      status: nearestStations.length > 0 ? "success" : "no_station_coordinates",
-    });
-  }, []);
+    await loadNearestStations(userLocation);
+  }, [loadNearestStations]);
 
   return {
     ...state,
     findNearestStations,
     nearestStation: state.stations[0],
+    refreshNearestStationsIfGranted,
   };
 }

@@ -17,10 +17,17 @@ function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
     };
   }
 
-  if (status === "minor_delays" || status === "disrupted" || status === "unknown") {
+  if (status === "minor_delays" || status === "disrupted") {
     return {
       backgroundColor: colors.warningSoft,
       color: colors.warning,
+    };
+  }
+
+  if (status === "unknown") {
+    return {
+      backgroundColor: colors.unknownSoft,
+      color: colors.unknown,
     };
   }
 
@@ -83,6 +90,7 @@ export default function LinesScreen() {
         data={displayLines}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           <View style={styles.header}>
             <Text style={styles.title}>{t("lines.title")}</Text>
@@ -109,7 +117,7 @@ export default function LinesScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <View style={styles.card}>
+          <View style={[styles.card, { borderLeftColor: item.color }]}>
             <View style={styles.cardHeader}>
               <View style={styles.lineIdentity}>
                 <View style={[styles.lineSymbol, { backgroundColor: item.color }]} />
@@ -148,6 +156,7 @@ function createStyles(colors: AppTheme["colors"]) {
       color: colors.text,
       fontSize: typography.title,
       fontWeight: "900",
+      lineHeight: 36,
     },
     subtitle: {
       color: colors.muted,
@@ -157,11 +166,11 @@ function createStyles(colors: AppTheme["colors"]) {
     statusPanel: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
-      borderRadius: radius.md,
+      borderRadius: radius.lg,
       borderWidth: 1,
       gap: spacing.xs,
       marginTop: spacing.xs,
-      padding: spacing.sm,
+      padding: spacing.md,
     },
     statusPanelHeader: {
       alignItems: "center",
@@ -171,7 +180,7 @@ function createStyles(colors: AppTheme["colors"]) {
       justifyContent: "space-between",
     },
     dataLabel: {
-      borderRadius: radius.sm,
+      borderRadius: 999,
       fontSize: typography.small,
       fontWeight: "900",
       overflow: "hidden",
@@ -205,12 +214,18 @@ function createStyles(colors: AppTheme["colors"]) {
     card: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
-      borderRadius: radius.md,
+      borderRadius: radius.lg,
       borderWidth: 1,
+      borderLeftWidth: 6,
       gap: spacing.md,
       marginBottom: spacing.md,
       overflow: "hidden",
       padding: spacing.md,
+      shadowColor: colors.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.03,
+      shadowRadius: 6,
+      elevation: 1,
     },
     cardHeader: {
       alignItems: "flex-start",
@@ -225,9 +240,11 @@ function createStyles(colors: AppTheme["colors"]) {
       gap: spacing.sm,
     },
     lineSymbol: {
+      borderColor: colors.surfaceRaised,
+      borderWidth: 4,
       borderRadius: 999,
-      height: 36,
-      width: 36,
+      height: 42,
+      width: 42,
     },
     cardBody: {
       gap: spacing.xs,
@@ -244,7 +261,7 @@ function createStyles(colors: AppTheme["colors"]) {
       marginTop: 2,
     },
     status: {
-      borderRadius: radius.sm,
+      borderRadius: 999,
       fontSize: typography.small,
       fontWeight: "900",
       overflow: "hidden",
@@ -259,14 +276,14 @@ function createStyles(colors: AppTheme["colors"]) {
     track: {
       backgroundColor: colors.soft,
       borderRadius: 999,
-      height: 6,
+      height: 8,
       marginTop: spacing.sm,
       overflow: "hidden",
     },
     trackFill: {
       borderRadius: 999,
-      height: 6,
-      width: "72%",
+      height: 8,
+      width: "78%",
     },
   });
 }

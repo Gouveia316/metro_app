@@ -1,5 +1,5 @@
 const sharedColors = {
-  accent: "#DC6441",
+  accent: "#E43C2F",
   blue: "#0072CE",
   green: "#00843D",
   red: "#E30613",
@@ -10,21 +10,25 @@ export const lightTheme = {
   name: "light",
   colors: {
     ...sharedColors,
-    accentSoft: "#FCEDE7",
-    background: "#F8F7F4",
-    border: "#E5E7EB",
+    accentSoft: "#FDE7E3",
+    background: "#F8F6F2",
+    border: "#E3E0DA",
     critical: "#E30613",
-    criticalSoft: "#FDECEC",
+    criticalSoft: "#FDE8EA",
     info: "#0072CE",
     infoSoft: "#EAF4FC",
-    muted: "#6B7280",
-    soft: "#F3F4F6",
+    muted: "#606A75",
+    shadow: "#1F2933",
+    soft: "#F1EEE9",
     success: "#00843D",
-    successSoft: "#EAF6EF",
+    successSoft: "#E5F4EC",
     surface: "#FFFFFF",
-    text: "#1F2933",
-    warning: "#B77900",
-    warningSoft: "#FFF7D6",
+    surfaceRaised: "#FFFCFA",
+    text: "#17212B",
+    unknown: "#69727D",
+    unknownSoft: "#EEF0F2",
+    warning: "#A86900",
+    warningSoft: "#FFF3C4",
   },
 } as const;
 
@@ -32,21 +36,25 @@ export const darkTheme = {
   name: "dark",
   colors: {
     ...sharedColors,
-    accentSoft: "#3A2119",
-    background: "#111827",
-    border: "#374151",
+    accentSoft: "#43201D",
+    background: "#10171D",
+    border: "#304050",
     critical: "#FF6B6B",
-    criticalSoft: "#3D1F23",
+    criticalSoft: "#3B1D23",
     info: "#60A5FA",
-    infoSoft: "#172B47",
-    muted: "#A7B0BE",
-    soft: "#1F2937",
+    infoSoft: "#142943",
+    muted: "#AEB8C2",
+    shadow: "#000000",
+    soft: "#1B2934",
     success: "#34D399",
-    successSoft: "#17352A",
-    surface: "#18212F",
-    text: "#F3F4F6",
+    successSoft: "#143528",
+    surface: "#172331",
+    surfaceRaised: "#1B2B3A",
+    text: "#F7FAFC",
+    unknown: "#AEB8C2",
+    unknownSoft: "#263544",
     warning: "#FBBF24",
-    warningSoft: "#3A2D13",
+    warningSoft: "#3A2C10",
   },
 } as const;
 
@@ -63,11 +71,13 @@ export const lineColors = {
 };
 
 export const spacing = {
+  xxs: 4,
   xs: 6,
   sm: 10,
   md: 16,
-  lg: 24,
+  lg: 22,
   xl: 32,
+  xxl: 44,
 };
 
 export const typography = {
@@ -77,10 +87,13 @@ export const typography = {
   heading: 20,
   display: 26,
   title: 30,
+  hero: 34,
 };
 
 export const radius = {
+  xs: 6,
   sm: 8,
-  md: 12,
-  lg: 16,
+  md: 14,
+  lg: 18,
+  xl: 24,
 };

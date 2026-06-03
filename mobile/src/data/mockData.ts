@@ -10,6 +10,7 @@ export type MetroLine = {
   color: string;
   status: LineStatus;
   statusLabelKey: TranslationKey;
+  statusReason?: "strike" | "closed" | null;
   note?: string;
   noteKey: TranslationKey;
 };
