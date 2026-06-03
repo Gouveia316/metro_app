@@ -44,6 +44,50 @@ export type OfficialStationsResult = {
   updatedAt: string;
 };
 
+type OfficialWaitTimeRow = {
+  stop_id?: string | null;
+  cais?: string | null;
+  hora?: string | null;
+  comboio?: string | null;
+  tempoChegada1?: string | null;
+  comboio2?: string | null;
+  tempoChegada2?: string | null;
+  comboio3?: string | null;
+  tempoChegada3?: string | null;
+  destino?: string | null;
+  sairServico?: string | null;
+};
+
+type OfficialWaitTimesResponse = {
+  source: string;
+  updatedAt: string;
+  data: {
+    resposta: OfficialWaitTimeRow[];
+    codigo: string;
+  };
+};
+
+export type OfficialWaitTimeArrival = {
+  id: string;
+  minutes: number;
+  trainId: string;
+};
+
+export type OfficialWaitTime = {
+  arrivals: OfficialWaitTimeArrival[];
+  destinationCode: string;
+  outOfService: boolean;
+  platformId: string;
+  rawTimestamp: string;
+  stationId: string;
+};
+
+export type OfficialWaitTimesResult = {
+  source: OfficialWaitTimesResponse["source"];
+  updatedAt: string;
+  waitTimes: OfficialWaitTime[];
+};
+
 const officialLineFields: Record<
   MetroLine["id"],
   { messageKey: OfficialLineKey; shortStatusKey: OfficialLineShortKey }
@@ -205,6 +249,62 @@ function mapOfficialStations(response: OfficialStationsResponse): Station[] {
     .filter((station): station is Station => Boolean(station));
 }
 
+function parseArrivalMinutes(value: string | null | undefined) {
+  const arrivalText = (value ?? "").trim();
+
+  if (!arrivalText || arrivalText === "--" || !/^\d+$/.test(arrivalText)) {
+    return undefined;
+  }
+
+  return Number.parseInt(arrivalText, 10);
+}
+
+function mapOfficialWaitTimeArrival(
+  trainId: string | null | undefined,
+  minutesText: string | null | undefined,
+  id: string,
+): OfficialWaitTimeArrival | undefined {
+  const minutes = parseArrivalMinutes(minutesText);
+
+  if (minutes == null) {
+    return undefined;
+  }
+
+  return {
+    id,
+    minutes,
+    trainId: trainId?.trim() || "-",
+  };
+}
+
+function mapOfficialWaitTimes(response: OfficialWaitTimesResponse): OfficialWaitTime[] {
+  return response.data.resposta
+    .map((row, rowIndex) => {
+      const stationId = row.stop_id?.trim();
+      const platformId = row.cais?.trim();
+
+      if (!stationId || !platformId) {
+        return null;
+      }
+
+      const arrivals = [
+        mapOfficialWaitTimeArrival(row.comboio, row.tempoChegada1, `${stationId}-${platformId}-${rowIndex}-1`),
+        mapOfficialWaitTimeArrival(row.comboio2, row.tempoChegada2, `${stationId}-${platformId}-${rowIndex}-2`),
+        mapOfficialWaitTimeArrival(row.comboio3, row.tempoChegada3, `${stationId}-${platformId}-${rowIndex}-3`),
+      ].filter((arrival): arrival is OfficialWaitTimeArrival => Boolean(arrival));
+
+      return {
+        arrivals,
+        destinationCode: row.destino?.trim() || "",
+        outOfService: row.sairServico?.trim() === "1",
+        platformId,
+        rawTimestamp: row.hora?.trim() || "",
+        stationId,
+      };
+    })
+    .filter((waitTime): waitTime is OfficialWaitTime => Boolean(waitTime));
+}
+
 export async function fetchOfficialLineStatus(): Promise<OfficialLineStatusResult> {
   const response = await fetch(`${BACKEND_BASE_URL}/metro/official/lines`);
 
@@ -249,4 +349,24 @@ export async function fetchOfficialStations(): Promise<OfficialStationsResult> {
 
 export function getCachedOfficialStation(stationId: string) {
   return officialStationsCache.find((station) => station.id === stationId);
+}
+
+export async function fetchOfficialWaitTimes(): Promise<OfficialWaitTimesResult> {
+  const response = await fetch(`${BACKEND_BASE_URL}/metro/official/wait-times`);
+
+  if (!response.ok) {
+    throw new Error(`Metro wait-times request failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as OfficialWaitTimesResponse;
+
+  if (payload.data.codigo !== "200") {
+    throw new Error(`Metro wait-times API returned code ${payload.data.codigo}`);
+  }
+
+  return {
+    source: payload.source,
+    updatedAt: payload.updatedAt,
+    waitTimes: mapOfficialWaitTimes(payload),
+  };
 }

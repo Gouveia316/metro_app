@@ -1,19 +1,29 @@
 import { useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 
-import { getCachedOfficialStation } from "@/api/client";
+import { fetchOfficialWaitTimes, getCachedOfficialStation } from "@/api/client";
+import type { OfficialWaitTime } from "@/api/client";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { arrivalsByStation, getStationLineIds, stations } from "@/data/mockData";
 import type { Arrival, Station } from "@/data/mockData";
-import type { TranslationKey } from "@/i18n/translations";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
 
+type DisplayArrival = {
+  destination: string;
+  id: string;
+  lineId?: string;
+  minutes: number;
+  platform: string;
+  trainId?: string;
+};
+
 type ArrivalSection = {
-  titleKey: TranslationKey;
-  data: Arrival[];
+  title: string;
+  data: DisplayArrival[];
 };
 
 type StationRouteParams = {
@@ -72,27 +82,121 @@ function getStationAreaText(station: Station, t: Translate) {
   return t("stations.zoneUnknown");
 }
 
-function groupArrivalsByDirection(arrivals: Arrival[]): ArrivalSection[] {
+function normalizeStationName(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function getMockArrivalsForStation(station: Station) {
+  const directArrivals = arrivalsByStation[station.id];
+
+  if (directArrivals) {
+    return directArrivals;
+  }
+
+  const matchingMockStation = stations.find(
+    (mockStation) => normalizeStationName(mockStation.name) === normalizeStationName(station.name),
+  );
+
+  return matchingMockStation ? arrivalsByStation[matchingMockStation.id] ?? [] : [];
+}
+
+function groupMockArrivalsByDirection(arrivals: Arrival[], t: Translate): ArrivalSection[] {
   const grouped = arrivals.reduce<Record<string, Arrival[]>>((acc, arrival) => {
     acc[arrival.directionKey] = [...(acc[arrival.directionKey] ?? []), arrival];
     return acc;
   }, {});
 
   return Object.entries(grouped).map(([titleKey, data]) => ({
-    titleKey: titleKey as TranslationKey,
-    data,
+    title: t(titleKey as Parameters<Translate>[0]),
+    data: data.map((arrival) => ({
+      destination: arrival.destination,
+      id: arrival.id,
+      lineId: arrival.lineId,
+      minutes: arrival.minutes,
+      platform: arrival.platform,
+    })),
   }));
+}
+
+function groupLiveArrivalsByPlatform(waitTimes: OfficialWaitTime[], t: Translate): ArrivalSection[] {
+  const grouped = waitTimes.reduce<Record<string, DisplayArrival[]>>((acc, waitTime) => {
+    const arrivals = waitTime.arrivals.slice(0, 3).map((arrival) => ({
+      destination: t("station.destinationCode", { code: waitTime.destinationCode || "-" }),
+      id: `${waitTime.platformId}-${arrival.id}`,
+      minutes: arrival.minutes,
+      platform: waitTime.platformId,
+      trainId: arrival.trainId,
+    }));
+
+    acc[waitTime.platformId] = [...(acc[waitTime.platformId] ?? []), ...arrivals].slice(0, 3);
+    return acc;
+  }, {});
+
+  return Object.entries(grouped)
+    .filter(([, data]) => data.length > 0)
+    .map(([platform, data]) => ({
+      title: t("station.platform", { platform }),
+      data,
+    }));
 }
 
 export default function StationDetailScreen() {
   const params = useLocalSearchParams<StationRouteParams>();
   const stationId = getParamValue(params.stationId);
   const { t, theme } = useAppPreferences();
+  const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [waitTimes, setWaitTimes] = useState<OfficialWaitTime[]>([]);
   const styles = createStyles(theme.colors);
   const station =
     stations.find((item) => item.id === stationId) ??
     (stationId ? getCachedOfficialStation(stationId) : undefined) ??
     stationFromRouteParams(params);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadWaitTimes() {
+      try {
+        const result = await fetchOfficialWaitTimes();
+
+        if (!isMounted) {
+          return;
+        }
+
+        setWaitTimes(result.waitTimes);
+        setDataMode("live");
+        setUpdatedAt(result.updatedAt);
+        setHasError(false);
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+
+        setWaitTimes([]);
+        setDataMode("mocked");
+        setUpdatedAt(null);
+        setHasError(true);
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadWaitTimes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   if (!station) {
     return (
@@ -105,8 +209,18 @@ export default function StationDetailScreen() {
     );
   }
 
-  const arrivals = arrivalsByStation[station.id] ?? [];
-  const arrivalSections = groupArrivalsByDirection(arrivals);
+  const arrivals = getMockArrivalsForStation(station);
+  const stationWaitTimes = waitTimes.filter((waitTime) => waitTime.stationId === station.id);
+  const arrivalSections =
+    dataMode === "live"
+      ? groupLiveArrivalsByPlatform(stationWaitTimes, t)
+      : groupMockArrivalsByDirection(arrivals, t);
+  const emptyMessage =
+    dataMode === "live" && stationWaitTimes.length === 0
+      ? t("station.arrivalsNoLiveData")
+      : dataMode === "live"
+        ? t("station.arrivalsUnavailable")
+        : t("station.empty");
 
   return (
     <Screen>
@@ -130,30 +244,54 @@ export default function StationDetailScreen() {
             <Pressable accessibilityRole="button" style={styles.favoriteButton} onPress={() => {}}>
               <Text style={styles.favoriteButtonText}>{t("station.saveFavorite")}</Text>
             </Pressable>
-            <Text style={styles.sectionIntro}>{t("station.arrivalsByDirection")}</Text>
+            <View style={styles.statusPanel}>
+              <View style={styles.statusPanelHeader}>
+                <Text
+                  style={[
+                    styles.dataLabel,
+                    dataMode === "live" ? styles.liveDataLabel : styles.mockedDataLabel,
+                  ]}
+                >
+                  {dataMode === "live" ? t("station.arrivalsLive") : t("station.arrivalsMocked")}
+                </Text>
+                {updatedAt ? (
+                  <Text style={styles.updatedAt}>
+                    {t("stations.updatedAt", { time: new Date(updatedAt).toLocaleString() })}
+                  </Text>
+                ) : null}
+              </View>
+              {isLoading ? <Text style={styles.loadingText}>{t("station.arrivalsLoading")}</Text> : null}
+              {hasError ? <Text style={styles.errorText}>{t("stations.error")}</Text> : null}
+            </View>
+            <Text style={styles.sectionIntro}>
+              {dataMode === "live" ? t("station.arrivalsLive") : t("station.arrivalsByDirection")}
+            </Text>
           </View>
         }
         renderSectionHeader={({ section }) => (
           <View style={styles.directionHeader}>
-            <Text style={styles.directionTitle}>{t(section.titleKey)}</Text>
+            <Text style={styles.directionTitle}>{section.title}</Text>
           </View>
         )}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={styles.arrivalTime}>
               <Text style={styles.minutes}>{item.minutes}</Text>
-              <Text style={styles.minuteLabel}>{t("station.minute")}</Text>
+              <Text style={styles.minuteLabel}>{t("station.minutes")}</Text>
             </View>
             <View style={styles.arrivalBody}>
               <Text style={styles.destination}>{item.destination}</Text>
               <View style={styles.arrivalMeta}>
-                <LineBadge lineId={item.lineId} />
+                {item.lineId ? <LineBadge lineId={item.lineId} /> : null}
+                {item.trainId ? <Text style={styles.train}>{t("station.train", { trainId: item.trainId })}</Text> : null}
                 <Text style={styles.platform}>{t("station.platform", { platform: item.platform })}</Text>
               </View>
             </View>
           </View>
         )}
-        ListEmptyComponent={<Text style={styles.empty}>{t("station.empty")}</Text>}
+        ListEmptyComponent={
+          isLoading ? null : <Text style={styles.empty}>{emptyMessage}</Text>
+        }
       />
     </Screen>
   );
@@ -221,6 +359,53 @@ function createStyles(colors: AppTheme["colors"]) {
       fontWeight: "900",
       textTransform: "uppercase",
     },
+    statusPanel: {
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      gap: spacing.xs,
+      padding: spacing.sm,
+    },
+    statusPanelHeader: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      justifyContent: "space-between",
+    },
+    dataLabel: {
+      borderRadius: radius.sm,
+      fontSize: typography.small,
+      fontWeight: "900",
+      overflow: "hidden",
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    liveDataLabel: {
+      backgroundColor: colors.successSoft,
+      color: colors.success,
+    },
+    mockedDataLabel: {
+      backgroundColor: colors.warningSoft,
+      color: colors.warning,
+    },
+    updatedAt: {
+      color: colors.muted,
+      fontSize: typography.small,
+      fontWeight: "700",
+    },
+    loadingText: {
+      color: colors.muted,
+      fontSize: typography.caption,
+      fontWeight: "700",
+    },
+    errorText: {
+      color: colors.warning,
+      fontSize: typography.caption,
+      fontWeight: "800",
+      lineHeight: 18,
+    },
     directionHeader: {
       paddingBottom: spacing.xs,
       paddingTop: spacing.sm,
@@ -274,6 +459,11 @@ function createStyles(colors: AppTheme["colors"]) {
       gap: spacing.sm,
     },
     platform: {
+      color: colors.muted,
+      fontSize: typography.caption,
+      fontWeight: "800",
+    },
+    train: {
       color: colors.muted,
       fontSize: typography.caption,
       fontWeight: "800",
