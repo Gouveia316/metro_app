@@ -1,5 +1,5 @@
-import { Link } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { Link, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { fetchOfficialStations } from "@/api/client";
@@ -7,6 +7,7 @@ import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { getStationLineIds, lineById, stations } from "@/data/mockData";
 import type { Station } from "@/data/mockData";
+import { useFavoriteStation } from "@/favorites/useFavoriteStation";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
@@ -218,7 +219,14 @@ export default function StationsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const { language, t, theme } = useAppPreferences();
+  const { favoriteStationId, reloadFavoriteStation } = useFavoriteStation();
   const styles = createStyles(theme.colors);
+
+  useFocusEffect(
+    useCallback(() => {
+      void reloadFavoriteStation();
+    }, [reloadFavoriteStation]),
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -359,6 +367,7 @@ export default function StationsScreen() {
         renderItem={({ item }) => {
           const lineIds = getStationLineIds(item);
           const aliases = getStationDisplayAliases(item, language);
+          const isFavoriteStation = item.id === favoriteStationId;
 
           return (
             <Link
@@ -377,7 +386,14 @@ export default function StationsScreen() {
             >
               <Pressable style={styles.card}>
                 <View style={styles.stationCopy}>
-                  <Text style={styles.name}>{item.name}</Text>
+                  <View style={styles.stationNameRow}>
+                    <Text style={styles.name}>{item.name}</Text>
+                    {isFavoriteStation ? (
+                      <View accessibilityLabel={t("station.savedAsFavorite")} style={styles.favoriteIndicator}>
+                        <Text style={styles.favoriteIndicatorText}>{"\u2605"}</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   {aliases.length > 0 ? (
                     <Text style={styles.aliases}>
                       {t("stations.knownAs")}: {aliases.join(", ")}
@@ -528,10 +544,30 @@ function createStyles(colors: AppTheme["colors"]) {
       flex: 1,
       gap: spacing.xs,
     },
+    stationNameRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.xs,
+    },
     name: {
       color: colors.text,
+      flexShrink: 1,
       fontSize: typography.heading,
       fontWeight: "900",
+    },
+    favoriteIndicator: {
+      alignItems: "center",
+      backgroundColor: colors.accentSoft,
+      borderRadius: 999,
+      height: 24,
+      justifyContent: "center",
+      width: 24,
+    },
+    favoriteIndicatorText: {
+      color: colors.accent,
+      fontSize: typography.small,
+      fontWeight: "900",
+      lineHeight: 16,
     },
     aliases: {
       color: colors.muted,
