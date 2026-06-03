@@ -70,6 +70,9 @@ export const translations = {
     "lines.data.mockedFallback": "Mocked fallback",
     "lines.error": "Backend unavailable. Showing mocked fallback.",
     "lines.loading": "Loading line status...",
+    "lines.map.fullColor": "Full color: normal service",
+    "lines.map.grey": "Grey: closed",
+    "lines.map.warning": "Warning: disruptions",
     "lines.updatedAt": "Updated {time}",
 
     "stations.title": "Stations",
@@ -231,6 +234,9 @@ export const translations = {
     "lines.data.mockedFallback": "Dados simulados",
     "lines.error": "Backend indisponível. A mostrar dados simulados.",
     "lines.loading": "A carregar estado das linhas...",
+    "lines.map.fullColor": "Cor forte: serviço normal",
+    "lines.map.grey": "Cinzento: encerrada",
+    "lines.map.warning": "Aviso: perturbações",
     "lines.updatedAt": "Atualizado {time}",
 
     "stations.title": "Estações",

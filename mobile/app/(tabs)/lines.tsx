@@ -2,12 +2,27 @@ import { useEffect, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
 import { fetchOfficialLineStatus } from "@/api/client";
+import { MetroNetworkMap } from "@/components/MetroNetworkMap";
 import { Screen } from "@/components/Screen";
 import { lines } from "@/data/mockData";
 import type { LineStatus, MetroLine } from "@/data/mockData";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
+
+type LineId = "blue" | "yellow" | "green" | "red";
+type DebugLineStatus = "normal" | "disrupted" | "interrupted" | "closed" | "unknown";
+
+const SHOW_DEBUG_NETWORK_MAP = true;
+
+// Local visual preview only. Keep null for normal use.
+// Example: { blue: "normal", yellow: "disrupted", green: "interrupted", red: "closed" }
+const DEBUG_LINE_STATUS_OVERRIDES: Partial<Record<LineId, DebugLineStatus>> | null = {
+  blue: "normal",
+  yellow: "disrupted",
+  green: "interrupted",
+  red: "closed",
+};
 
 function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
   if (status === "good_service") {
@@ -37,6 +52,53 @@ function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
   };
 }
 
+function getDebugStatusUpdate(status: DebugLineStatus): Pick<MetroLine, "status" | "statusLabelKey"> {
+  if (status === "normal") {
+    return {
+      status: "good_service",
+      statusLabelKey: "line.status.good",
+    };
+  }
+
+  if (status === "interrupted") {
+    return {
+      status: "suspended",
+      statusLabelKey: "line.status.suspended",
+    };
+  }
+
+  if (status === "closed") {
+    return {
+      status: "closed",
+      statusLabelKey: "line.status.closed",
+    };
+  }
+
+  if (status === "unknown") {
+    return {
+      status: "unknown",
+      statusLabelKey: "line.status.unknown",
+    };
+  }
+
+  return {
+    status: "disrupted",
+    statusLabelKey: "line.status.disrupted",
+  };
+}
+
+function applyDebugLineStatusOverrides(displayLines: MetroLine[]) {
+  if (!DEBUG_LINE_STATUS_OVERRIDES) {
+    return displayLines;
+  }
+
+  return displayLines.map((line) => {
+    const override = DEBUG_LINE_STATUS_OVERRIDES[line.id as LineId];
+
+    return override ? { ...line, ...getDebugStatusUpdate(override) } : line;
+  });
+}
+
 export default function LinesScreen() {
   const { t, theme } = useAppPreferences();
   const [displayLines, setDisplayLines] = useState<MetroLine[]>(lines);
@@ -45,6 +107,7 @@ export default function LinesScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const styles = createStyles(theme.colors);
+  const visibleLines = applyDebugLineStatusOverrides(displayLines);
 
   useEffect(() => {
     let isMounted = true;
@@ -87,7 +150,7 @@ export default function LinesScreen() {
   return (
     <Screen>
       <FlatList
-        data={displayLines}
+        data={visibleLines}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
@@ -95,6 +158,7 @@ export default function LinesScreen() {
           <View style={styles.header}>
             <Text style={styles.title}>{t("lines.title")}</Text>
             <Text style={styles.subtitle}>{t("lines.subtitle")}</Text>
+            {SHOW_DEBUG_NETWORK_MAP ? <MetroNetworkMap lines={visibleLines} /> : null}
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
                 <Text
