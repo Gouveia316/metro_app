@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
+import { fetchOfficialLineStatus } from "@/api/client";
 import { Screen } from "@/components/Screen";
 import { lines } from "@/data/mockData";
-import type { LineStatus } from "@/data/mockData";
+import type { LineStatus, MetroLine } from "@/data/mockData";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
@@ -15,7 +17,7 @@ function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
     };
   }
 
-  if (status === "minor_delays") {
+  if (status === "minor_delays" || status === "disrupted" || status === "unknown") {
     return {
       backgroundColor: colors.warningSoft,
       color: colors.warning,
@@ -30,18 +32,80 @@ function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
 
 export default function LinesScreen() {
   const { t, theme } = useAppPreferences();
+  const [displayLines, setDisplayLines] = useState<MetroLine[]>(lines);
+  const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const styles = createStyles(theme.colors);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadOfficialLines() {
+      try {
+        const result = await fetchOfficialLineStatus();
+
+        if (!isMounted) {
+          return;
+        }
+
+        setDisplayLines(result.lines);
+        setDataMode("live");
+        setUpdatedAt(result.updatedAt);
+        setHasError(false);
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+
+        setDisplayLines(lines);
+        setDataMode("mocked");
+        setUpdatedAt(null);
+        setHasError(true);
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadOfficialLines();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <Screen>
       <FlatList
-        data={lines}
+        data={displayLines}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.header}>
             <Text style={styles.title}>{t("lines.title")}</Text>
             <Text style={styles.subtitle}>{t("lines.subtitle")}</Text>
+            <View style={styles.statusPanel}>
+              <View style={styles.statusPanelHeader}>
+                <Text
+                  style={[
+                    styles.dataLabel,
+                    dataMode === "live" ? styles.liveDataLabel : styles.mockedDataLabel,
+                  ]}
+                >
+                  {dataMode === "live" ? t("lines.data.live") : t("lines.data.mockedFallback")}
+                </Text>
+                {updatedAt ? (
+                  <Text style={styles.updatedAt}>
+                    {t("lines.updatedAt", { time: new Date(updatedAt).toLocaleString() })}
+                  </Text>
+                ) : null}
+              </View>
+              {isLoading ? <Text style={styles.loadingText}>{t("lines.loading")}</Text> : null}
+              {hasError ? <Text style={styles.errorText}>{t("lines.error")}</Text> : null}
+            </View>
           </View>
         }
         renderItem={({ item }) => (
@@ -59,7 +123,7 @@ export default function LinesScreen() {
               </Text>
             </View>
             <View style={styles.cardBody}>
-              <Text style={styles.note}>{t(item.noteKey)}</Text>
+              <Text style={styles.note}>{item.note ?? t(item.noteKey)}</Text>
               <View style={styles.track}>
                 <View style={[styles.trackFill, { backgroundColor: item.color }]} />
               </View>
@@ -89,6 +153,54 @@ function createStyles(colors: AppTheme["colors"]) {
       color: colors.muted,
       fontSize: typography.body,
       lineHeight: 22,
+    },
+    statusPanel: {
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      gap: spacing.xs,
+      marginTop: spacing.xs,
+      padding: spacing.sm,
+    },
+    statusPanelHeader: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      justifyContent: "space-between",
+    },
+    dataLabel: {
+      borderRadius: radius.sm,
+      fontSize: typography.small,
+      fontWeight: "900",
+      overflow: "hidden",
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    liveDataLabel: {
+      backgroundColor: colors.successSoft,
+      color: colors.success,
+    },
+    mockedDataLabel: {
+      backgroundColor: colors.warningSoft,
+      color: colors.warning,
+    },
+    updatedAt: {
+      color: colors.muted,
+      fontSize: typography.small,
+      fontWeight: "700",
+    },
+    loadingText: {
+      color: colors.muted,
+      fontSize: typography.caption,
+      fontWeight: "700",
+    },
+    errorText: {
+      color: colors.warning,
+      fontSize: typography.caption,
+      fontWeight: "800",
+      lineHeight: 18,
     },
     card: {
       backgroundColor: colors.surface,

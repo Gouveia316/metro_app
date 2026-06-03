@@ -1,7 +1,7 @@
 import type { TranslationKey } from "@/i18n/translations";
 import { lineColors } from "@/styles/theme";
 
-export type LineStatus = "good_service" | "minor_delays" | "suspended";
+export type LineStatus = "good_service" | "minor_delays" | "suspended" | "closed" | "disrupted" | "unknown";
 export type AlertSeverity = "info" | "warning" | "critical";
 
 export type MetroLine = {
@@ -10,6 +10,7 @@ export type MetroLine = {
   color: string;
   status: LineStatus;
   statusLabelKey: TranslationKey;
+  note?: string;
   noteKey: TranslationKey;
 };
 
