@@ -17,8 +17,12 @@ export type MetroLine = {
 export type Station = {
   id: string;
   name: string;
+  latitude?: number;
+  lineIds?: string[];
   lines: string[];
-  areaKey: TranslationKey;
+  longitude?: number;
+  areaKey?: TranslationKey;
+  zone?: string;
 };
 
 export type Arrival = {
@@ -77,6 +81,10 @@ export const lines: MetroLine[] = [
 export const lineById: Record<string, MetroLine> = Object.fromEntries(
   lines.map((line) => [line.id, line]),
 );
+
+export function getStationLineIds(station: Station) {
+  return station.lineIds ?? station.lines;
+}
 
 export const stations: Station[] = [
   { id: "baixa-chiado", name: "Baixa-Chiado", areaKey: "area.baixaChiado", lines: ["blue", "green"] },

@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
-import { alerts, lines, stations } from "@/data/mockData";
+import { alerts, getStationLineIds, lines, stations } from "@/data/mockData";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
 import type { AppTheme } from "@/styles/theme";
@@ -17,6 +17,9 @@ const urgentAlerts = alerts.filter((alert) => alert.severity !== "info").length;
 export default function HomeScreen() {
   const { language, setLanguage, t, theme, themeName, toggleTheme } = useAppPreferences();
   const styles = createStyles(theme.colors);
+  const favoriteStationArea = favoriteStation.areaKey
+    ? t(favoriteStation.areaKey)
+    : t("stations.zoneUnknown");
 
   return (
     <Screen scroll>
@@ -73,14 +76,14 @@ export default function HomeScreen() {
           <View>
             <Text style={styles.sectionTitle}>{t("home.favoriteStation")}</Text>
             <Text style={styles.stationName}>{favoriteStation.name}</Text>
-            <Text style={styles.stationArea}>{t(favoriteStation.areaKey)}</Text>
+            <Text style={styles.stationArea}>{favoriteStationArea}</Text>
           </View>
           <View style={styles.favoriteMark}>
             <Text style={styles.favoriteMarkText}>{t("home.saved")}</Text>
           </View>
         </View>
         <View style={styles.badgeRow}>
-          {favoriteStation.lines.map((lineId) => (
+          {getStationLineIds(favoriteStation).map((lineId) => (
             <LineBadge key={lineId} lineId={lineId} />
           ))}
         </View>

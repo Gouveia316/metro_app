@@ -1,10 +1,11 @@
 import { useLocalSearchParams } from "expo-router";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 
+import { getCachedOfficialStation } from "@/api/client";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
-import { arrivalsByStation, stations } from "@/data/mockData";
-import type { Arrival } from "@/data/mockData";
+import { arrivalsByStation, getStationLineIds, stations } from "@/data/mockData";
+import type { Arrival, Station } from "@/data/mockData";
 import type { TranslationKey } from "@/i18n/translations";
 import { useAppPreferences } from "@/state/AppPreferences";
 import { radius, spacing, typography } from "@/styles/theme";
@@ -14,6 +15,62 @@ type ArrivalSection = {
   titleKey: TranslationKey;
   data: Arrival[];
 };
+
+type StationRouteParams = {
+  latitude?: string;
+  lineIds?: string;
+  longitude?: string;
+  name?: string;
+  stationId?: string;
+  zone?: string;
+};
+
+type Translate = ReturnType<typeof useAppPreferences>["t"];
+
+function getParamValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parseRouteCoordinate(value: string | undefined) {
+  const coordinate = Number.parseFloat(value ?? "");
+  return Number.isFinite(coordinate) ? coordinate : undefined;
+}
+
+function stationFromRouteParams(params: StationRouteParams): Station | undefined {
+  const id = getParamValue(params.stationId)?.trim();
+  const name = getParamValue(params.name)?.trim();
+
+  if (!id || !name) {
+    return undefined;
+  }
+
+  const lineIds = (getParamValue(params.lineIds) ?? "")
+    .split(",")
+    .map((lineId) => lineId.trim())
+    .filter(Boolean);
+
+  return {
+    id,
+    name,
+    latitude: parseRouteCoordinate(getParamValue(params.latitude)),
+    lineIds,
+    lines: lineIds,
+    longitude: parseRouteCoordinate(getParamValue(params.longitude)),
+    zone: getParamValue(params.zone)?.trim() || undefined,
+  };
+}
+
+function getStationAreaText(station: Station, t: Translate) {
+  if (station.areaKey) {
+    return t(station.areaKey);
+  }
+
+  if (station.zone) {
+    return t("stations.zone", { zone: station.zone });
+  }
+
+  return t("stations.zoneUnknown");
+}
 
 function groupArrivalsByDirection(arrivals: Arrival[]): ArrivalSection[] {
   const grouped = arrivals.reduce<Record<string, Arrival[]>>((acc, arrival) => {
@@ -28,10 +85,14 @@ function groupArrivalsByDirection(arrivals: Arrival[]): ArrivalSection[] {
 }
 
 export default function StationDetailScreen() {
-  const { stationId } = useLocalSearchParams<{ stationId: string }>();
+  const params = useLocalSearchParams<StationRouteParams>();
+  const stationId = getParamValue(params.stationId);
   const { t, theme } = useAppPreferences();
   const styles = createStyles(theme.colors);
-  const station = stations.find((item) => item.id === stationId);
+  const station =
+    stations.find((item) => item.id === stationId) ??
+    (stationId ? getCachedOfficialStation(stationId) : undefined) ??
+    stationFromRouteParams(params);
 
   if (!station) {
     return (
@@ -59,9 +120,9 @@ export default function StationDetailScreen() {
             <View style={styles.stationHero}>
               <Text style={styles.eyebrow}>{t("station.eyebrow")}</Text>
               <Text style={styles.title}>{station.name}</Text>
-              <Text style={styles.subtitle}>{t(station.areaKey)}</Text>
+              <Text style={styles.subtitle}>{getStationAreaText(station, t)}</Text>
               <View style={styles.badgeRow}>
-                {station.lines.map((lineId) => (
+                {getStationLineIds(station).map((lineId) => (
                   <LineBadge key={lineId} lineId={lineId} />
                 ))}
               </View>

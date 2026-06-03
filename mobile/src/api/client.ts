@@ -1,6 +1,6 @@
 import { BACKEND_BASE_URL } from "@/api/config";
 import { lines } from "@/data/mockData";
-import type { LineStatus, MetroLine } from "@/data/mockData";
+import type { LineStatus, MetroLine, Station } from "@/data/mockData";
 
 type OfficialLineKey = "azul" | "amarela" | "verde" | "vermelha";
 type OfficialLineShortKey = "azul_curta" | "amarela_curta" | "verde_curta" | "vermelha_curta";
@@ -20,6 +20,30 @@ export type OfficialLineStatusResult = {
   updatedAt: string;
 };
 
+type OfficialStation = {
+  stop_id?: string | null;
+  stop_name?: string | null;
+  stop_lat?: string | null;
+  stop_lon?: string | null;
+  linha?: string | null;
+  zone_id?: string | null;
+};
+
+type OfficialStationsResponse = {
+  source: string;
+  updatedAt: string;
+  data: {
+    resposta: OfficialStation[];
+    codigo: string;
+  };
+};
+
+export type OfficialStationsResult = {
+  source: OfficialStationsResponse["source"];
+  stations: Station[];
+  updatedAt: string;
+};
+
 const officialLineFields: Record<
   MetroLine["id"],
   { messageKey: OfficialLineKey; shortStatusKey: OfficialLineShortKey }
@@ -29,6 +53,15 @@ const officialLineFields: Record<
   green: { messageKey: "verde", shortStatusKey: "verde_curta" },
   red: { messageKey: "vermelha", shortStatusKey: "vermelha_curta" },
 };
+
+const officialLineNameToId: Record<string, string> = {
+  amarela: "yellow",
+  azul: "blue",
+  verde: "green",
+  vermelha: "red",
+};
+
+let officialStationsCache: Station[] = [];
 
 function normalizeText(value: string | null | undefined) {
   return (value ?? "")
@@ -134,6 +167,44 @@ function mapOfficialLines(response: OfficialLinesResponse): MetroLine[] {
   });
 }
 
+function parseOfficialLineIds(lineText: string | null | undefined) {
+  return (lineText ?? "")
+    .replace("[", "")
+    .replace("]", "")
+    .split(",")
+    .map((lineName) => officialLineNameToId[normalizeText(lineName)])
+    .filter((lineId): lineId is string => Boolean(lineId));
+}
+
+function parseCoordinate(value: string | null | undefined) {
+  const coordinate = Number.parseFloat(value ?? "");
+  return Number.isFinite(coordinate) ? coordinate : undefined;
+}
+
+function mapOfficialStations(response: OfficialStationsResponse): Station[] {
+  return response.data.resposta
+    .map((station) => {
+      const id = station.stop_id?.trim();
+      const name = station.stop_name?.trim();
+      const lineIds = parseOfficialLineIds(station.linha);
+
+      if (!id || !name) {
+        return null;
+      }
+
+      return {
+        id,
+        name,
+        latitude: parseCoordinate(station.stop_lat),
+        lineIds,
+        lines: lineIds,
+        longitude: parseCoordinate(station.stop_lon),
+        zone: station.zone_id?.trim() || undefined,
+      };
+    })
+    .filter((station): station is Station => Boolean(station));
+}
+
 export async function fetchOfficialLineStatus(): Promise<OfficialLineStatusResult> {
   const response = await fetch(`${BACKEND_BASE_URL}/metro/official/lines`);
 
@@ -152,4 +223,30 @@ export async function fetchOfficialLineStatus(): Promise<OfficialLineStatusResul
     source: payload.source,
     updatedAt: payload.updatedAt,
   };
+}
+
+export async function fetchOfficialStations(): Promise<OfficialStationsResult> {
+  const response = await fetch(`${BACKEND_BASE_URL}/metro/official/stations`);
+
+  if (!response.ok) {
+    throw new Error(`Metro stations request failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as OfficialStationsResponse;
+
+  if (payload.data.codigo !== "200") {
+    throw new Error(`Metro stations API returned code ${payload.data.codigo}`);
+  }
+
+  officialStationsCache = mapOfficialStations(payload);
+
+  return {
+    source: payload.source,
+    stations: officialStationsCache,
+    updatedAt: payload.updatedAt,
+  };
+}
+
+export function getCachedOfficialStation(stationId: string) {
+  return officialStationsCache.find((station) => station.id === stationId);
 }
