@@ -31,7 +31,7 @@ function interpolate(template: string, params?: TranslationParams) {
 }
 
 export function AppPreferencesProvider({ children }: PropsWithChildren) {
-  const [language, setLanguage] = useState<Language>("en");
+  const [language, setLanguage] = useState<Language>("pt");
   const [themeName, setThemeName] = useState<AppThemeName>("light");
 
   const theme = themeName === "light" ? lightTheme : darkTheme;

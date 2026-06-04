@@ -19,7 +19,6 @@ export function Screen({ children, scroll = false }: Props) {
       {scroll ? (
         <ScrollView
           contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
         >
           {content}
         </ScrollView>
@@ -36,10 +35,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: spacing.xl,
   },
 });
