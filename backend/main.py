@@ -126,6 +126,9 @@ class NormalizedStationsResponse(BaseModel):
 
 class NormalizedArrival(BaseModel):
     trainId: str
+    secondsUntilArrival: int
+    displayMinutes: int
+    # Deprecated compatibility alias for current mobile clients; prefer displayMinutes.
     minutes: int
 
 
@@ -326,13 +329,17 @@ def parse_float(value: Any) -> float | None:
         return None
 
 
-def parse_arrival_minutes(value: Any) -> int | None:
+def parse_arrival_seconds(value: Any) -> int | None:
     arrival_text = "" if value is None else str(value).strip()
 
     if not arrival_text or arrival_text == "--" or not arrival_text.isdigit():
         return None
 
     return int(arrival_text)
+
+
+def seconds_to_display_minutes(seconds: int) -> int:
+    return (seconds + 59) // 60
 
 
 def parse_station_line_ids(value: Any) -> list[str]:
@@ -541,7 +548,35 @@ def normalize_stations_response(response: dict[str, Any]) -> NormalizedStationsR
     )
 
 
-def normalize_wait_time_row(row: dict[str, Any]) -> NormalizedWaitTime | None:
+def build_destination_names_by_code(response: dict[str, Any]) -> dict[str, str]:
+    official_destinations = official_response_data(response)
+
+    if not isinstance(official_destinations, list):
+        raise HTTPException(status_code=502, detail="Official Metro destinations payload was not a list")
+
+    destination_names_by_code: dict[str, str] = {}
+
+    for destination in official_destinations:
+        if not isinstance(destination, dict):
+            continue
+
+        destination_code = trim_or_none(destination.get("id_destino"))
+        destination_name = trim_or_none(destination.get("nome_destino"))
+
+        if destination_code and destination_name:
+            destination_names_by_code[destination_code] = destination_name
+
+    return destination_names_by_code
+
+
+def get_destination_names_by_code() -> dict[str, str]:
+    return build_destination_names_by_code(get_official_metro_response("destinations"))
+
+
+def normalize_wait_time_row(
+    row: dict[str, Any],
+    destination_names_by_code: dict[str, str],
+) -> NormalizedWaitTime | None:
     station_id = trim_or_none(row.get("stop_id"))
     platform_id = trim_or_none(row.get("cais"))
 
@@ -555,30 +590,39 @@ def normalize_wait_time_row(row: dict[str, Any]) -> NormalizedWaitTime | None:
         ("comboio2", "tempoChegada2"),
         ("comboio3", "tempoChegada3"),
     ):
-        minutes = parse_arrival_minutes(row.get(time_key))
+        seconds_until_arrival = parse_arrival_seconds(row.get(time_key))
 
-        if minutes is None:
+        if seconds_until_arrival is None:
             continue
+
+        display_minutes = seconds_to_display_minutes(seconds_until_arrival)
 
         arrivals.append(
             NormalizedArrival(
                 trainId=trim_or_none(row.get(train_key)) or "-",
-                minutes=minutes,
+                secondsUntilArrival=seconds_until_arrival,
+                displayMinutes=display_minutes,
+                minutes=display_minutes,
             )
         )
+
+    destination_code = trim_or_none(row.get("destino"))
 
     return NormalizedWaitTime(
         stationId=station_id,
         platformId=platform_id,
-        destinationCode=trim_or_none(row.get("destino")),
-        destinationName=None,
+        destinationCode=destination_code,
+        destinationName=destination_names_by_code.get(destination_code) if destination_code else None,
         outOfService=trim_or_none(row.get("sairServico")) == "1",
         rawTimestamp=trim_or_none(row.get("hora")),
         arrivals=arrivals,
     )
 
 
-def normalize_wait_times_response(response: dict[str, Any]) -> NormalizedWaitTimesResponse:
+def normalize_wait_times_response(
+    response: dict[str, Any],
+    destination_names_by_code: dict[str, str] | None = None,
+) -> NormalizedWaitTimesResponse:
     if is_circulation_closed_response(response):
         message = get_circulation_closed_message(response)
         logger.info("Official Metro API reports operational closure for wait-times: %s", message)
@@ -596,10 +640,12 @@ def normalize_wait_times_response(response: dict[str, Any]) -> NormalizedWaitTim
     if not isinstance(official_wait_times, list):
         raise HTTPException(status_code=502, detail="Official Metro wait-times payload was not a list")
 
+    destination_names_by_code = destination_names_by_code or {}
+
     wait_times = [
         normalized_wait_time
         for normalized_wait_time in (
-            normalize_wait_time_row(row)
+            normalize_wait_time_row(row, destination_names_by_code)
             for row in official_wait_times
             if isinstance(row, dict)
         )
@@ -689,6 +735,8 @@ def get_official_metro_response(endpoint_name: str) -> dict[str, Any]:
             return metro_official_client.get_lines()
         if endpoint_name == "stations":
             return metro_official_client.get_stations()
+        if endpoint_name == "destinations":
+            return metro_official_client.get_destinations()
         if endpoint_name == "wait-times":
             return metro_official_client.get_wait_times()
     except MetroApiConfigError as exc:
@@ -714,6 +762,11 @@ def get_official_stations() -> dict[str, Any]:
     return get_official_metro_response("stations")
 
 
+@app.get("/metro/official/destinations")
+def get_official_destinations() -> dict[str, Any]:
+    return get_official_metro_response("destinations")
+
+
 @app.get("/metro/official/wait-times")
 def get_official_wait_times() -> dict[str, Any]:
     return get_official_metro_response("wait-times")
@@ -731,14 +784,24 @@ def get_normalized_stations() -> NormalizedStationsResponse:
 
 @app.get("/metro/wait-times", response_model=NormalizedWaitTimesResponse)
 def get_normalized_wait_times() -> NormalizedWaitTimesResponse:
-    return normalize_wait_times_response(get_official_metro_response("wait-times"))
+    wait_times_response = get_official_metro_response("wait-times")
+
+    if is_circulation_closed_response(wait_times_response):
+        return normalize_wait_times_response(wait_times_response)
+
+    return normalize_wait_times_response(
+        wait_times_response,
+        get_destination_names_by_code(),
+    )
 
 
 @app.get("/metro/stations/{station_id}/arrivals", response_model=NormalizedStationArrivalsResponse)
 def get_normalized_station_arrivals(station_id: str) -> NormalizedStationArrivalsResponse:
-    wait_times_response = normalize_wait_times_response(get_official_metro_response("wait-times"))
+    official_wait_times_response = get_official_metro_response("wait-times")
 
-    if wait_times_response.status == "closed":
+    if is_circulation_closed_response(official_wait_times_response):
+        wait_times_response = normalize_wait_times_response(official_wait_times_response)
+
         return NormalizedStationArrivalsResponse(
             source=wait_times_response.source,
             updatedAt=wait_times_response.updatedAt,
@@ -751,6 +814,10 @@ def get_normalized_station_arrivals(station_id: str) -> NormalizedStationArrival
             platforms=[],
         )
 
+    wait_times_response = normalize_wait_times_response(
+        official_wait_times_response,
+        get_destination_names_by_code(),
+    )
     lines_response = normalize_lines_response(get_official_metro_response("lines"))
     station_wait_times = [
         wait_time for wait_time in wait_times_response.waitTimes if wait_time.stationId == station_id

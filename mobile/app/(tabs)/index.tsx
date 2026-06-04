@@ -4,6 +4,10 @@ import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
+  formatArrivalCountdown,
+  isArrivalVisible,
+} from "@/api/arrivalCountdown";
+import {
   fetchOfficialLineStatus,
   fetchOfficialStationArrivals,
   fetchOfficialStations,
@@ -37,8 +41,11 @@ type ArrivalPreviewItem = {
   destination: string;
   id: string;
   lineId?: string;
+  displayMinutes?: number;
   minutes: number;
-  platform: string;
+  responseUpdatedAt?: string;
+  secondsUntilArrival?: number;
+  platform?: string;
   trainId?: string;
 };
 
@@ -227,17 +234,18 @@ function mapMockArrivalPreview(arrivals: Arrival[]): ArrivalPreviewItem[] {
     .slice(0, 3);
 }
 
-function mapLiveArrivalPreview(result: StationArrivalsResult, t: Translate): ArrivalPreviewItem[] {
+function mapLiveArrivalPreview(result: StationArrivalsResult): ArrivalPreviewItem[] {
   return result.platforms
     .flatMap((platform) =>
       platform.outOfService
         ? []
         : platform.arrivals.map((arrival) => ({
-            destination: platform.destinationName ?? t("station.destinationCode", { code: platform.destinationCode || "-" }),
+            destination: platform.destinationName?.trim() || platform.destinationCode || "-",
             id: `${platform.platformId}-${arrival.id}`,
-            minutes: arrival.minutes,
-            platform: platform.platformId,
-            trainId: arrival.trainId,
+            displayMinutes: arrival.displayMinutes,
+            minutes: arrival.displayMinutes ?? arrival.minutes,
+            responseUpdatedAt: platform.responseUpdatedAt,
+            secondsUntilArrival: arrival.secondsUntilArrival,
           })),
     )
     .sort((firstArrival, secondArrival) => firstArrival.minutes - secondArrival.minutes)
@@ -338,7 +346,6 @@ function getLocalArrivalPreview(station?: Station): ArrivalPreviewState {
 }
 
 function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
-  const { t } = useAppPreferences();
   const stationId = station?.id;
   const [preview, setPreview] = useState<ArrivalPreviewState>(emptyArrivalPreview);
 
@@ -369,7 +376,7 @@ function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
           emptyReason: result.emptyReason,
           hasError: false,
           isLoading: false,
-          items: mapLiveArrivalPreview(result, t),
+          items: mapLiveArrivalPreview(result),
           state: result.state,
           updatedAt: result.updatedAt,
         });
@@ -397,12 +404,21 @@ function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
     return () => {
       isMounted = false;
     };
-  }, [station, stationId, t]);
+  }, [station, stationId]);
 
   return preview;
 }
 
 export default function HomeScreen() {
+  const [countdownNow, setCountdownNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setCountdownNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
   const { language, setLanguage, t, theme, themeName, toggleTheme } = useAppPreferences();
   const {
     error: favoriteError,
@@ -515,6 +531,7 @@ export default function HomeScreen() {
         <NearestStationPanel
           arrivalPreview={nearestArrivalPreview}
           colors={theme.colors}
+          countdownNow={countdownNow}
           nearestStation={displayedNearestStation}
           onFindNearestStation={findNearestStations}
           status={displayedNearestStationStatus}
@@ -524,6 +541,7 @@ export default function HomeScreen() {
 
         <FavoriteStationPanel
           arrivalPreview={favoriteArrivalPreview}
+          countdownNow={countdownNow}
           favoriteStation={resolvedFavoriteStation}
           favoriteStationId={favoriteStationId}
           hasStorageError={Boolean(favoriteError)}
@@ -601,6 +619,7 @@ function CriticalServiceAlert({
 function NearestStationPanel({
   arrivalPreview,
   colors,
+  countdownNow,
   nearestStation,
   onFindNearestStation,
   status,
@@ -609,6 +628,7 @@ function NearestStationPanel({
 }: {
   arrivalPreview: ArrivalPreviewState;
   colors: AppTheme["colors"];
+  countdownNow: number;
   nearestStation?: NearestStation;
   onFindNearestStation: () => void;
   status: ReturnType<typeof useNearestStations>["status"];
@@ -647,7 +667,7 @@ function NearestStationPanel({
               <LineBadge key={lineId} lineId={lineId} />
             ))}
           </View>
-          <StationArrivalsPreview preview={arrivalPreview} styles={styles} t={t} />
+          <StationArrivalsPreview now={countdownNow} preview={arrivalPreview} styles={styles} t={t} />
           <Text style={styles.privacyNote}>{t("home.locationPrivacyNote")}</Text>
           <Link href={{ pathname: "/stations/[stationId]", params: getStationRouteParams(nearestStation) }} asChild>
             <Pressable style={styles.primaryButton}>
@@ -693,6 +713,7 @@ function SegmentedLineAccent({
 
 function FavoriteStationPanel({
   arrivalPreview,
+  countdownNow,
   favoriteStation,
   favoriteStationId,
   hasStorageError,
@@ -701,6 +722,7 @@ function FavoriteStationPanel({
   t,
 }: {
   arrivalPreview: ArrivalPreviewState;
+  countdownNow: number;
   favoriteStation?: Station;
   favoriteStationId: string | null;
   hasStorageError: boolean;
@@ -752,7 +774,7 @@ function FavoriteStationPanel({
           <LineBadge key={lineId} lineId={lineId} />
         ))}
       </View>
-      <StationArrivalsPreview preview={arrivalPreview} styles={styles} t={t} />
+      <StationArrivalsPreview now={countdownNow} preview={arrivalPreview} styles={styles} t={t} />
       <Link
         href={{
           pathname: "/stations/[stationId]",
@@ -790,14 +812,26 @@ function SaveFavoriteStationAction({
 }
 
 function StationArrivalsPreview({
+  now,
   preview,
   styles,
   t,
 }: {
+  now: number;
   preview: ArrivalPreviewState;
   styles: ReturnType<typeof createStyles>;
   t: Translate;
 }) {
+  const visibleItems = preview.items
+    .map((arrival) => ({
+      arrival,
+      countdownLabel: formatArrivalCountdown(arrival, now, t("station.arriving"), t("station.minutes")),
+    }))
+    .filter(
+      (item): item is { arrival: ArrivalPreviewItem; countdownLabel: string } =>
+        item.countdownLabel !== null && isArrivalVisible(item.arrival, now),
+    );
+
   return (
     <View style={styles.arrivalsBlock}>
       <View style={styles.arrivalsHeader}>
@@ -814,27 +848,56 @@ function StationArrivalsPreview({
         ) : null}
       </View>
       {preview.isLoading ? <Text style={styles.stateText}>{t("station.arrivalsLoading")}</Text> : null}
-      {!preview.isLoading && preview.items.length === 0 ? (
+      {!preview.isLoading && visibleItems.length === 0 ? (
         <Text style={styles.emptyArrivalText}>{getArrivalEmptyMessage(preview, t)}</Text>
       ) : null}
       {!preview.isLoading
-        ? preview.items.map((arrival) => (
+        ? visibleItems.map(({ arrival, countdownLabel }) => (
             <View key={arrival.id} style={styles.arrivalRow}>
-              <View style={styles.arrivalMinutes}>
-                <Text style={styles.arrivalMinutesValue}>{arrival.minutes}</Text>
-                <Text style={styles.arrivalMinutesLabel}>{t("station.minutes")}</Text>
-              </View>
+              <ArrivalTimePill label={countdownLabel} styles={styles} />
               <View style={styles.arrivalCopy}>
                 <Text style={styles.arrivalDestination}>{arrival.destination}</Text>
-                <View style={styles.arrivalMeta}>
-                  {arrival.lineId ? <LineBadge lineId={arrival.lineId} /> : null}
-                  {arrival.trainId ? <Text style={styles.arrivalMetaText}>{t("station.train", { trainId: arrival.trainId })}</Text> : null}
-                  <Text style={styles.arrivalMetaText}>{t("station.platform", { platform: arrival.platform })}</Text>
-                </View>
+                {arrival.lineId ? (
+                  <View style={styles.arrivalMeta}>
+                    <LineBadge lineId={arrival.lineId} />
+                  </View>
+                ) : null}
               </View>
             </View>
           ))
         : null}
+    </View>
+  );
+}
+
+function ArrivalTimePill({
+  label,
+  styles,
+}: {
+  label: string;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const numericMatch = label.match(/^(\d+)\s+(.+)$/);
+
+  if (numericMatch) {
+    return (
+      <View style={styles.arrivalMinutes}>
+        <Text style={styles.arrivalMinutesValue}>{numericMatch[1]}</Text>
+        <Text style={styles.arrivalMinutesLabel}>{numericMatch[2]}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.arrivalMinutes, styles.arrivalMinutesArriving]}>
+      <Text
+        adjustsFontSizeToFit
+        minimumFontScale={0.8}
+        numberOfLines={2}
+        style={styles.arrivalMinutesArrivingText}
+      >
+        {label}
+      </Text>
     </View>
   );
 }
@@ -1137,18 +1200,34 @@ function createStyles(colors: AppTheme["colors"]) {
       alignItems: "center",
       backgroundColor: colors.accentSoft,
       borderRadius: radius.sm,
-      minWidth: 54,
-      paddingVertical: spacing.xs,
+      justifyContent: "center",
+      minHeight: 48,
+      minWidth: 56,
+      paddingHorizontal: spacing.xs,
+      paddingVertical: spacing.xxs,
     },
     arrivalMinutesValue: {
       color: colors.accent,
-      fontSize: typography.heading,
+      fontSize: 20,
       fontWeight: "900",
+      lineHeight: 22,
     },
     arrivalMinutesLabel: {
       color: colors.muted,
-      fontSize: typography.small,
+      fontSize: 10,
       fontWeight: "800",
+      lineHeight: 12,
+    },
+    arrivalMinutesArriving: {
+      maxWidth: 64,
+      minWidth: 64,
+    },
+    arrivalMinutesArrivingText: {
+      color: colors.accent,
+      fontSize: 12,
+      fontWeight: "900",
+      lineHeight: 14,
+      textAlign: "center",
     },
     arrivalCopy: {
       flex: 1,
@@ -1164,11 +1243,6 @@ function createStyles(colors: AppTheme["colors"]) {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: spacing.xs,
-    },
-    arrivalMetaText: {
-      color: colors.muted,
-      fontSize: typography.small,
-      fontWeight: "800",
     },
     emptyArrivalText: {
       color: colors.muted,
