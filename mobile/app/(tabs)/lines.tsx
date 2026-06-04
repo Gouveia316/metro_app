@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 
 import { fetchOfficialLineStatus } from "@/api/client";
-import { MetroNetworkMap } from "@/components/MetroNetworkMap";
+import { MetroMapPreview } from "@/components/MetroMapPreview";
+import type { MetroDiagramLineStatus, MetroDiagramLineStatuses } from "@/components/MetroMapPreview";
 import { Screen } from "@/components/Screen";
 import { lines } from "@/data/mockData";
 import type { LineStatus, MetroLine } from "@/data/mockData";
@@ -13,16 +14,9 @@ import type { AppTheme } from "@/styles/theme";
 type LineId = "blue" | "yellow" | "green" | "red";
 type DebugLineStatus = "normal" | "disrupted" | "interrupted" | "closed" | "unknown";
 
-const SHOW_DEBUG_NETWORK_MAP = true;
-
 // Local visual preview only. Keep null for normal use.
 // Example: { blue: "normal", yellow: "disrupted", green: "interrupted", red: "closed" }
-const DEBUG_LINE_STATUS_OVERRIDES: Partial<Record<LineId, DebugLineStatus>> | null = {
-  blue: "normal",
-  yellow: "disrupted",
-  green: "interrupted",
-  red: "closed",
-};
+const DEBUG_LINE_STATUS_OVERRIDES: Partial<Record<LineId, DebugLineStatus>> | null = { blue: "normal", yellow: "disrupted", green: "interrupted", red: "closed" };
 
 function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
   if (status === "good_service") {
@@ -99,6 +93,63 @@ function applyDebugLineStatusOverrides(displayLines: MetroLine[]) {
   });
 }
 
+function normalizeStatusText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function hasStrikeShutdownMessage(line: MetroLine) {
+  const statusText = normalizeStatusText(
+    [line.note, line.noteKey, line.statusLabelKey].filter(Boolean).join(" "),
+  );
+
+  return statusText.includes("greve") || statusText.includes("strike");
+}
+
+function normalizeStrikeLineStatus(line: MetroLine): MetroLine {
+  if (line.status !== "closed" || !hasStrikeShutdownMessage(line)) {
+    return line;
+  }
+
+  return {
+    ...line,
+    status: "suspended",
+    statusLabelKey: "line.status.suspended",
+  };
+}
+
+function getDiagramLineStatus(status: LineStatus): MetroDiagramLineStatus {
+  if (status === "good_service") {
+    return "normal";
+  }
+
+  if (status === "minor_delays" || status === "disrupted") {
+    return "disrupted";
+  }
+
+  if (status === "suspended") {
+    return "interrupted";
+  }
+
+  if (status === "closed") {
+    return "closed";
+  }
+
+  return "unknown";
+}
+
+function getDiagramLineStatuses(displayLines: MetroLine[]): MetroDiagramLineStatuses {
+  return displayLines.reduce<MetroDiagramLineStatuses>((acc, line) => {
+    if (line.id === "blue" || line.id === "yellow" || line.id === "green" || line.id === "red") {
+      acc[line.id] = getDiagramLineStatus(line.status);
+    }
+
+    return acc;
+  }, {});
+}
+
 export default function LinesScreen() {
   const { t, theme } = useAppPreferences();
   const [displayLines, setDisplayLines] = useState<MetroLine[]>(lines);
@@ -107,7 +158,8 @@ export default function LinesScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const styles = createStyles(theme.colors);
-  const visibleLines = applyDebugLineStatusOverrides(displayLines);
+  const visibleLines = applyDebugLineStatusOverrides(displayLines.map(normalizeStrikeLineStatus));
+  const diagramLineStatuses = getDiagramLineStatuses(visibleLines);
 
   useEffect(() => {
     let isMounted = true;
@@ -158,7 +210,6 @@ export default function LinesScreen() {
           <View style={styles.header}>
             <Text style={styles.title}>{t("lines.title")}</Text>
             <Text style={styles.subtitle}>{t("lines.subtitle")}</Text>
-            {SHOW_DEBUG_NETWORK_MAP ? <MetroNetworkMap lines={visibleLines} /> : null}
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
                 <Text
@@ -178,6 +229,7 @@ export default function LinesScreen() {
               {isLoading ? <Text style={styles.loadingText}>{t("lines.loading")}</Text> : null}
               {hasError ? <Text style={styles.errorText}>{t("lines.error")}</Text> : null}
             </View>
+            <MetroMapPreview lineStatuses={diagramLineStatuses} />
           </View>
         }
         renderItem={({ item }) => (
