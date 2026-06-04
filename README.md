@@ -1,80 +1,98 @@
-# Lisbon Metro App
+# Proximo Metro
 
-Mobile-first MVP foundation for a Lisbon metro app.
+Proximo Metro is an independent, unofficial mobile app for following Metro de Lisboa. It helps riders check line status, stations, arrivals and wait times, nearest station, favorite station, alerts, and the network map.
 
-The product will eventually show metro lines, stations, next train arrivals, service status, alerts, and favorite stations. This initial version uses mocked/static data and avoids authentication, databases, payments, push notifications, NFC, and external API integrations.
+PT: App independente. Nao afiliada ao Metropolitano de Lisboa.  
+EN: Independent app. Not affiliated with Metropolitano de Lisboa.
 
 ## Stack
 
-- Mobile: React Native, Expo, TypeScript, Expo Router
-- Backend: Python, FastAPI
-- Docs: product scope and roadmap in `/docs`
+- Mobile: Expo React Native, Expo SDK 54, TypeScript
+- Backend: FastAPI, Python
+- Map rendering: `react-native-svg`
+- Location: `expo-location`
+- Local storage: AsyncStorage
 
-## Repository Structure
+## Current Features
 
-```text
-.
-├── backend
-│   ├── main.py
-│   └── requirements.txt
-├── docs
-│   ├── MVP_SCOPE.md
-│   └── ROADMAP.md
-└── mobile
-    ├── app
-    ├── src
-    ├── app.json
-    ├── babel.config.js
-    ├── package.json
-    └── tsconfig.json
-```
+- Live line status through `GET /metro/lines/status`
+- Live station list through `GET /metro/stations`
+- Station arrivals through `GET /metro/stations/{stationId}/arrivals`
+- Favorite station stored locally with AsyncStorage
+- Nearest station detection with foreground location only
+- Local Haversine distance calculation on device
+- Custom mobile-first metro diagram with preview and fullscreen views
+- Map reacts visually to line status
+- Portuguese default language, English secondary
+- Dark mode readable labels on the map
+- Graceful empty/closed states for closed service or unavailable arrivals
 
-## Run The Backend
+## Custom Metro Diagram
 
-From the repository root:
+The app uses a custom React Native SVG diagram component:
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
+- Component: `mobile/src/components/metro-map/MetroDiagramSvg.tsx`
+- Editable/source SVG: `mobile/src/assets/maps/metro-diagram-final.svg`
 
-On Windows PowerShell:
+The diagram is custom-made for Proximo Metro. Line states are represented visually:
+
+- `normal`: original line color
+- `disrupted`: muted line with warning station dots
+- `interrupted`: more muted line with warning station dots
+- `closed`: grey/muted line, no warning dots
+- `unknown`: neutral/muted line, no warning dots
+
+Preview mode hides station labels. Fullscreen mode shows station labels.
+
+## Backend Endpoints
+
+Mobile should prefer normalized endpoints. Raw official endpoints are mainly useful for debugging.
+
+- `GET /health`
+- `GET /metro/official/lines`
+- `GET /metro/official/stations`
+- `GET /metro/official/wait-times`
+- `GET /metro/lines/status`
+- `GET /metro/stations`
+- `GET /metro/stations/{stationId}/arrivals`
+- `GET /metro/wait-times`
+
+## Local Development
+
+Backend:
 
 ```powershell
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --reload
+.venv\Scripts\activate
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend will be available at `http://127.0.0.1:8000`.
+Mobile:
 
-Useful endpoints:
-
-- `GET /health`
-- `GET /lines`
-- `GET /stations`
-- `GET /stations/{station_id}/arrivals`
-- `GET /alerts`
-
-## Run The Mobile App
-
-Expo SDK 54 requires Node.js 20.19 or newer.
-
-From the repository root:
-
-```bash
+```powershell
 cd mobile
-npm install
-npm run start
+npx expo start -c
 ```
 
-Then open the app in Expo Go, an emulator, or a simulator.
+When testing on iPhone through Expo Go, do not use `localhost` in the mobile API config. Use the PC LAN address, for example:
 
-## Current Data Model
+```ts
+http://YOUR_PC_LAN_IP:8000
+```
 
-The backend and mobile app both use static mocked data for now. Real service status, arrivals, alerts, and station metadata should be connected later through official or approved data sources.
+## Debug Constants
+
+Reset debug constants before committing:
+
+- `DEBUG_LINE_STATUS_OVERRIDES = null`
+- `DEBUG_NEAREST_STATION_ID = null`, if present
+
+## Privacy And Location
+
+Location use is foreground only. There is no background tracking. Coordinates are not sent to the backend. Nearest station is calculated locally on the device.
+
+## Attribution And Assets
+
+Older Wikimedia SVG map assets may still exist as reference or backup; credits are kept in `docs/CREDITS.md`.
+
+The current app map is custom and does not use official Metro branding or logo. Do not use the official Metro logo or protected assets without authorization.
