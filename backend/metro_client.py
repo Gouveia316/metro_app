@@ -66,6 +66,9 @@ class MetroOfficialApiClient:
     def get_stations(self) -> dict[str, Any]:
         return self._wrap_response(self._get_json("/infoEstacao/todos"))
 
+    def get_destinations(self) -> dict[str, Any]:
+        return self._wrap_response(self._get_json("/infoDestinos/todos"))
+
     def get_wait_times(self) -> dict[str, Any]:
         return self._wrap_response(self._get_json("/tempoEspera/Estacao/todos"))
 

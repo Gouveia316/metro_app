@@ -48,8 +48,10 @@ export type OfficialStationsResult = {
 };
 
 export type OfficialWaitTimeArrival = {
+  displayMinutes?: number;
   id: string;
   minutes: number;
+  secondsUntilArrival?: number;
   trainId: string;
 };
 
@@ -60,11 +62,14 @@ export type OfficialWaitTime = {
   outOfService: boolean;
   platformId: string;
   rawTimestamp: string;
+  responseUpdatedAt: string;
 };
 
 type NormalizedStationArrival = {
+  displayMinutes?: number;
+  minutes?: number;
+  secondsUntilArrival?: number;
   trainId: string;
-  minutes: number;
 };
 
 type NormalizedStationPlatform = {
@@ -142,7 +147,7 @@ function getStatusLabelKey(status: LineStatus): MetroLine["statusLabelKey"] {
 
 function getFallbackMessageKey(status: LineStatus): MetroLine["noteKey"] {
   if (status === "good_service") {
-    return "line.statusMessage.normal";
+    return "line.statusMessage.normalService";
   }
 
   if (status === "suspended") {
@@ -167,13 +172,14 @@ function mapNormalizedLines(response: NormalizedLinesResponse): MetroLine[] {
     const existingLine = lineById[line.id] ?? lines[0];
     const status = mapNormalizedLineStatus(line.status);
     const message = line.message.trim();
+    const publicMessage = status === "good_service" ? "" : message;
 
     return {
       ...existingLine,
       color: line.color || existingLine.color,
       id: line.id,
-      note: message || undefined,
-      noteKey: message ? existingLine.noteKey : getFallbackMessageKey(status),
+      note: publicMessage || undefined,
+      noteKey: publicMessage ? existingLine.noteKey : getFallbackMessageKey(status),
       status,
       statusLabelKey: getStatusLabelKey(status),
       statusReason: line.statusReason,
@@ -195,16 +201,36 @@ function mapNormalizedStations(response: NormalizedStationsResponse): Station[] 
 
 function mapNormalizedStationPlatforms(response: NormalizedStationArrivalsResponse): OfficialWaitTime[] {
   return response.platforms.map((platform) => ({
-    arrivals: platform.arrivals.map((arrival, arrivalIndex) => ({
-      id: `${platform.id}-${arrival.trainId}-${arrivalIndex}`,
-      minutes: arrival.minutes,
-      trainId: arrival.trainId,
-    })),
+    arrivals: platform.arrivals
+      .map((arrival, arrivalIndex) => {
+        const displayMinutes =
+          typeof arrival.displayMinutes === "number"
+            ? arrival.displayMinutes
+            : typeof arrival.minutes === "number"
+              ? arrival.minutes
+              : typeof arrival.secondsUntilArrival === "number"
+                ? Math.ceil(arrival.secondsUntilArrival / 60)
+                : null;
+
+        if (displayMinutes === null) {
+          return null;
+        }
+
+        return {
+          displayMinutes,
+          id: `${platform.id}-${arrival.trainId}-${arrivalIndex}`,
+          minutes: displayMinutes,
+          secondsUntilArrival: arrival.secondsUntilArrival,
+          trainId: arrival.trainId,
+        };
+      })
+      .filter((arrival): arrival is OfficialWaitTimeArrival => arrival !== null),
     destinationCode: platform.destinationCode ?? "",
-    destinationName: platform.destinationName,
+    destinationName: platform.destinationName?.trim() || null,
     outOfService: platform.outOfService,
     platformId: platform.id,
     rawTimestamp: platform.rawTimestamp ?? "",
+    responseUpdatedAt: response.updatedAt,
   }));
 }
 
