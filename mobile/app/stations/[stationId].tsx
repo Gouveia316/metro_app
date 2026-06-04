@@ -1,9 +1,14 @@
-import { useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Animated, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 
-import { fetchOfficialStationArrivals, getCachedOfficialStation } from "@/api/client";
-import type { OfficialWaitTime } from "@/api/client";
+import {
+  fetchStationArrivalsCached,
+  getCachedStationArrivals,
+  isStationArrivalsFresh,
+} from "@/api/arrivalCache";
+import { getCachedOfficialStation } from "@/api/client";
+import type { OfficialWaitTime, StationArrivalsResult } from "@/api/client";
 import { LineBadge } from "@/components/LineBadge";
 import { Screen } from "@/components/Screen";
 import { arrivalsByStation, getStationLineIds, lineById, stations } from "@/data/mockData";
@@ -26,10 +31,30 @@ type DisplayArrival = {
   trainId?: string;
 };
 
+type DirectionArrivalGroup = {
+  arrivals: DisplayArrival[];
+  destination: string;
+  id: string;
+  lineId?: string;
+};
+
 type ArrivalSection = {
   lineId?: string;
   title: string;
-  data: DisplayArrival[];
+  data: DirectionArrivalGroup[];
+};
+
+type CountdownArrivalItem = {
+  displayMinutes?: number;
+  id: string;
+  minutes?: number;
+  responseUpdatedAt?: string;
+  secondsUntilArrival?: number;
+};
+
+type LoadStationArrivalsOptions = {
+  forceRefresh?: boolean;
+  showLoading?: boolean;
 };
 
 type ArrivalState = "arrivals_available" | "service_closed" | "no_arrivals_available" | "no_live_data";
@@ -45,6 +70,9 @@ type StationRouteParams = {
 };
 
 type Translate = ReturnType<typeof useAppPreferences>["t"];
+
+const EXIT_ANIMATION_MS = 180;
+const AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 function getParamValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -89,6 +117,20 @@ function getStationAreaText(station: Station, t: Translate) {
   }
 
   return t("stations.zoneUnknown");
+}
+
+function formatUpdatedAtTime(updatedAt: string) {
+  const updatedAtDate = new Date(updatedAt);
+
+  if (Number.isNaN(updatedAtDate.getTime())) {
+    return null;
+  }
+
+  return updatedAtDate.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+  });
 }
 
 function normalizeStationName(name: string) {
@@ -147,22 +189,55 @@ function getReliableArrivalLineId(destination: string, station: Station) {
   return knownLineId && stationLineIds.includes(knownLineId) ? knownLineId : undefined;
 }
 
-function groupMockArrivalsByDirection(arrivals: Arrival[], t: Translate): ArrivalSection[] {
-  const grouped = arrivals.reduce<Record<string, Arrival[]>>((acc, arrival) => {
-    acc[arrival.directionKey] = [...(acc[arrival.directionKey] ?? []), arrival];
-    return acc;
+function groupArrivalsByLineAndDestination(arrivals: DisplayArrival[], t: Translate): ArrivalSection[] {
+  const groupedSections = arrivals.reduce<Record<string, ArrivalSection>>((acc, arrival) => {
+    const sectionKey = arrival.lineId
+      ? `line-${arrival.lineId}`
+      : `destination-${normalizeStationName(arrival.destination)}`;
+    const sectionTitle =
+      arrival.lineId && lineById[arrival.lineId] ? t(lineById[arrival.lineId].nameKey) : arrival.destination;
+    const currentSection = acc[sectionKey] ?? {
+      data: [],
+      lineId: arrival.lineId,
+      title: sectionTitle,
+    };
+    const destinationKey = normalizeStationName(arrival.destination);
+    const destinationGroupId = `${sectionKey}-${destinationKey}`;
+    const currentDestinationGroup = currentSection.data.find((group) => group.id === destinationGroupId);
+    const nextDestinationGroup: DirectionArrivalGroup = {
+      arrivals: [...(currentDestinationGroup?.arrivals ?? []), arrival]
+        .sort((firstArrival, secondArrival) => firstArrival.minutes - secondArrival.minutes)
+        .slice(0, 3),
+      destination: arrival.destination,
+      id: destinationGroupId,
+      lineId: arrival.lineId,
+    };
+
+    return {
+      ...acc,
+      [sectionKey]: {
+        ...currentSection,
+        data: currentDestinationGroup
+          ? currentSection.data.map((group) => (group.id === destinationGroupId ? nextDestinationGroup : group))
+          : [...currentSection.data, nextDestinationGroup],
+      },
+    };
   }, {});
 
-  return Object.entries(grouped).map(([titleKey, data]) => ({
-    title: t(titleKey as Parameters<Translate>[0]),
-    data: data.map((arrival) => ({
+  return Object.values(groupedSections).filter((section) => section.data.length > 0);
+}
+
+function groupMockArrivalsByLineAndDestination(arrivals: Arrival[], t: Translate): ArrivalSection[] {
+  return groupArrivalsByLineAndDestination(
+    arrivals.map((arrival) => ({
       destination: arrival.destination,
       id: arrival.id,
       lineId: arrival.lineId,
       minutes: arrival.minutes,
       platform: arrival.platform,
     })),
-  }));
+    t,
+  );
 }
 
 function groupLiveArrivalsByPublicSection(
@@ -170,12 +245,15 @@ function groupLiveArrivalsByPublicSection(
   station: Station,
   t: Translate,
 ): ArrivalSection[] {
-  const grouped = waitTimes.reduce<Record<string, ArrivalSection>>((acc, waitTime) => {
+  const arrivals = waitTimes.flatMap((waitTime) => {
+    if (waitTime.outOfService) {
+      return [];
+    }
+
     const destination = getPublicDestination(waitTime);
     const lineId = getReliableArrivalLineId(destination, station);
-    const sectionKey = lineId ? `line-${lineId}` : `destination-${normalizeStationName(destination)}`;
-    const title = lineId && lineById[lineId] ? t(lineById[lineId].nameKey) : destination;
-    const arrivals = waitTime.arrivals.slice(0, 3).map((arrival) => ({
+
+    return waitTime.arrivals.map((arrival) => ({
       destination,
       id: `${waitTime.platformId}-${arrival.id}`,
       lineId,
@@ -186,19 +264,9 @@ function groupLiveArrivalsByPublicSection(
       platform: waitTime.platformId,
       trainId: arrival.trainId,
     }));
+  });
 
-    const currentSection = acc[sectionKey] ?? { data: [], lineId, title };
-    acc[sectionKey] = {
-      ...currentSection,
-      data: [...currentSection.data, ...arrivals]
-        .sort((firstArrival, secondArrival) => firstArrival.minutes - secondArrival.minutes)
-        .slice(0, 3),
-    };
-
-    return acc;
-  }, {});
-
-  return Object.values(grouped).filter((section) => section.data.length > 0);
+  return groupArrivalsByLineAndDestination(arrivals, t);
 }
 
 function getEmptyArrivalMessage(
@@ -225,6 +293,57 @@ function getEmptyArrivalMessage(
   }
 
   return t("station.arrivalsUnavailable");
+}
+
+function hasLiveCountdown(arrival: CountdownArrivalItem) {
+  return typeof arrival.secondsUntilArrival === "number" && Boolean(arrival.responseUpdatedAt);
+}
+
+function useArrivalExitAnimation(
+  arrivals: CountdownArrivalItem[],
+  now: number,
+  arrivingLabel: string,
+  minuteLabel: string,
+) {
+  const [removedArrivalIds, setRemovedArrivalIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentArrivalIds = new Set(arrivals.map((arrival) => arrival.id));
+
+    setRemovedArrivalIds((currentRemovedIds) => {
+      let nextRemovedIds = currentRemovedIds;
+
+      currentRemovedIds.forEach((arrivalId) => {
+        if (!currentArrivalIds.has(arrivalId)) {
+          nextRemovedIds = nextRemovedIds === currentRemovedIds ? new Set(currentRemovedIds) : nextRemovedIds;
+          nextRemovedIds.delete(arrivalId);
+        }
+      });
+
+      arrivals.forEach((arrival) => {
+        const countdownLabel = formatArrivalCountdown(arrival, now, arrivingLabel, minuteLabel);
+
+        if (countdownLabel !== null && nextRemovedIds.has(arrival.id)) {
+          nextRemovedIds = nextRemovedIds === currentRemovedIds ? new Set(currentRemovedIds) : nextRemovedIds;
+          nextRemovedIds.delete(arrival.id);
+        }
+      });
+
+      return nextRemovedIds;
+    });
+  }, [arrivals, arrivingLabel, minuteLabel, now]);
+
+  const markArrivalExited = useCallback((arrivalId: string) => {
+    setRemovedArrivalIds((currentRemovedIds) => {
+      if (currentRemovedIds.has(arrivalId)) {
+        return currentRemovedIds;
+      }
+
+      return new Set(currentRemovedIds).add(arrivalId);
+    });
+  }, []);
+
+  return { markArrivalExited, removedArrivalIds };
 }
 
 export default function StationDetailScreen() {
@@ -254,37 +373,80 @@ export default function StationDetailScreen() {
   const [emptyReason, setEmptyReason] = useState<ArrivalEmptyReason | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [platforms, setPlatforms] = useState<OfficialWaitTime[]>([]);
+  const isFocusedRef = useRef(true);
+  const isMountedRef = useRef(false);
+  const isRefreshingArrivalsRef = useRef(false);
+  const lastAutoRefreshAtRef = useRef(0);
   const styles = createStyles(theme.colors);
   const station =
     stations.find((item) => item.id === stationId) ??
     (stationId ? getCachedOfficialStation(stationId) : undefined) ??
     stationFromRouteParams(params);
 
-  useEffect(() => {
-    let isMounted = true;
+  useFocusEffect(
+    useCallback(() => {
+      isFocusedRef.current = true;
 
-    async function loadStationArrivals() {
+      return () => {
+        isFocusedRef.current = false;
+      };
+    }, []),
+  );
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const applyStationArrivalsResult = useCallback((result: StationArrivalsResult, hasResultError = false) => {
+    setPlatforms(result.platforms);
+    setArrivalState(result.state);
+    setEmptyReason(result.emptyReason);
+    setDataMode("live");
+    setUpdatedAt(result.updatedAt);
+    setHasError(hasResultError);
+  }, []);
+
+  const loadStationArrivals = useCallback(
+    async ({ forceRefresh = false, showLoading = true }: LoadStationArrivalsOptions = {}) => {
       if (!stationId) {
         setIsLoading(false);
-        return;
+        return null;
+      }
+
+      const cachedResult = getCachedStationArrivals(stationId);
+
+      if (cachedResult && !forceRefresh) {
+        applyStationArrivalsResult(cachedResult);
+        setIsLoading(false);
+
+        if (isStationArrivalsFresh(stationId)) {
+          return cachedResult;
+        }
+      } else if (showLoading) {
+        setIsLoading(true);
       }
 
       try {
-        const result = await fetchOfficialStationArrivals(stationId);
+        const result = await fetchStationArrivalsCached(stationId, { forceRefresh });
 
-        if (!isMounted) {
-          return;
+        if (!isMountedRef.current) {
+          return result;
         }
 
-        setPlatforms(result.platforms);
-        setArrivalState(result.state);
-        setEmptyReason(result.emptyReason);
-        setDataMode("live");
-        setUpdatedAt(result.updatedAt);
-        setHasError(false);
+        applyStationArrivalsResult(result);
+        return result;
       } catch {
-        if (!isMounted) {
-          return;
+        if (!isMountedRef.current) {
+          return null;
+        }
+
+        if (cachedResult) {
+          applyStationArrivalsResult(cachedResult, true);
+          return cachedResult;
         }
 
         setPlatforms([]);
@@ -294,55 +456,111 @@ export default function StationDetailScreen() {
         setUpdatedAt(null);
         setHasError(true);
       } finally {
-        if (isMounted) {
+        if (isMountedRef.current && showLoading) {
           setIsLoading(false);
         }
       }
-    }
+      return null;
+    },
+    [applyStationArrivalsResult, stationId],
+  );
 
-    loadStationArrivals();
+  useEffect(() => {
+    void loadStationArrivals();
+  }, [loadStationArrivals]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [stationId]);
-
-  if (!station) {
-    return (
-      <Screen>
-        <View style={styles.missingCard}>
-          <Text style={styles.title}>{t("station.notFoundTitle")}</Text>
-          <Text style={styles.subtitle}>{t("station.notFoundBody")}</Text>
-        </View>
-      </Screen>
-    );
-  }
-
-  const arrivals = getMockArrivalsForStation(station);
-  const arrivalSections =
-    dataMode === "live"
+  const arrivingLabel = t("station.arriving");
+  const minuteLabel = t("station.minutes");
+  const arrivals = station ? getMockArrivalsForStation(station) : [];
+  const arrivalSections = station
+    ? dataMode === "live"
       ? groupLiveArrivalsByPublicSection(platforms, station, t)
-      : groupMockArrivalsByDirection(arrivals, t);
+      : groupMockArrivalsByLineAndDestination(arrivals, t)
+    : [];
+  const allArrivalItems = arrivalSections.flatMap((section) =>
+    section.data.flatMap((directionGroup) => directionGroup.arrivals),
+  );
+  const { markArrivalExited, removedArrivalIds } = useArrivalExitAnimation(
+    allArrivalItems,
+    countdownNow,
+    arrivingLabel,
+    minuteLabel,
+  );
   const visibleArrivalSections = arrivalSections
     .map((section) => ({
       ...section,
-      data: section.data.filter((arrival) => {
-        const countdownLabel = formatArrivalCountdown(
-          arrival,
-          countdownNow,
-          t("station.arriving"),
-          t("station.minutes"),
-        );
+      data: section.data
+        .map((directionGroup) => ({
+          ...directionGroup,
+          arrivals: directionGroup.arrivals.filter((arrival) => {
+            const countdownLabel = formatArrivalCountdown(arrival, countdownNow, arrivingLabel, minuteLabel);
 
-        return countdownLabel !== null && isArrivalVisible(arrival, countdownNow);
-      }),
+            return (
+              !removedArrivalIds.has(arrival.id) &&
+              (countdownLabel !== null || hasLiveCountdown(arrival))
+            );
+          }),
+        }))
+        .filter((directionGroup) => directionGroup.arrivals.length > 0),
     }))
     .filter((section) => section.data.length > 0);
   const hasLivePlatforms = platforms.length > 0;
   const emptyMessage = getEmptyArrivalMessage(dataMode, arrivalState, emptyReason, hasLivePlatforms, t);
-  const isFavoriteStation = favoriteStationId === station.id;
+  const isFavoriteStation = station ? favoriteStationId === station.id : false;
+  const updatedAtTime = updatedAt ? formatUpdatedAtTime(updatedAt) : null;
+  const shouldAutoRefreshArrivals = visibleArrivalSections.some((section) =>
+    section.data.some((visibleGroup) => {
+      const sourceGroup = arrivalSections
+        .find((sourceSection) => sourceSection.title === section.title && sourceSection.lineId === section.lineId)
+        ?.data.find((group) => group.id === visibleGroup.id);
+
+      return (
+        visibleGroup.arrivals.length > 0 &&
+        visibleGroup.arrivals.length < 3 &&
+        (sourceGroup?.arrivals.length ?? 0) >= 3
+      );
+    }),
+  );
+
+  useEffect(() => {
+    if (!stationId || !shouldAutoRefreshArrivals || isLoading || !isFocusedRef.current) {
+      return;
+    }
+
+    const nowMs = Date.now();
+
+    if (
+      isRefreshingArrivalsRef.current ||
+      nowMs - lastAutoRefreshAtRef.current < AUTO_REFRESH_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    lastAutoRefreshAtRef.current = nowMs;
+    isRefreshingArrivalsRef.current = true;
+
+    void loadStationArrivals({ forceRefresh: true, showLoading: false }).finally(() => {
+      isRefreshingArrivalsRef.current = false;
+    });
+  }, [isLoading, loadStationArrivals, shouldAutoRefreshArrivals, stationId]);
+
+  if (!station) {
+    return (
+      <>
+        <Stack.Screen options={{ headerBackTitle: t("app.back"), title: t("nav.station") }} />
+        <Screen>
+          <View style={styles.missingCard}>
+            <Text style={styles.title}>{t("station.notFoundTitle")}</Text>
+            <Text style={styles.subtitle}>{t("station.notFoundBody")}</Text>
+          </View>
+        </Screen>
+      </>
+    );
+  }
 
   return (
+    <>
+    <Stack.Screen options={{ headerBackTitle: t("app.back"), title: station.name }} />
     <Screen>
       <SectionList
         sections={visibleArrivalSections}
@@ -377,60 +595,134 @@ export default function StationDetailScreen() {
             {favoriteError ? <Text style={styles.errorText}>{t("home.favoriteStationLoadError")}</Text> : null}
             <View style={styles.statusPanel}>
               <View style={styles.statusPanelHeader}>
-                <Text style={styles.statusPanelTitle}>
-                  {dataMode === "live" ? t("station.arrivalsLive") : t("station.arrivalsMocked")}
-                </Text>
-                {updatedAt ? (
+                <Text style={styles.statusPanelTitle}>{t("station.realTimeData")}</Text>
+                {updatedAtTime ? (
                   <Text numberOfLines={1} style={styles.updatedAt}>
-                    {t("stations.updatedAt", { time: new Date(updatedAt).toLocaleString() })}
+                    {t("station.updatedAtTime", { time: updatedAtTime })}
                   </Text>
                 ) : null}
               </View>
               {isLoading ? <Text style={styles.loadingText}>{t("station.arrivalsLoading")}</Text> : null}
               {hasError ? <Text style={styles.errorText}>{t("stations.error")}</Text> : null}
             </View>
-            <Text style={styles.sectionIntro}>
-              {dataMode === "live" ? t("station.arrivalsLive") : t("station.arrivalsByDirection")}
-            </Text>
+            <Text style={styles.innerSectionTitle}>{t("station.nextTrains")}</Text>
           </View>
         }
-        renderSectionHeader={({ section }) => (
-          <View style={styles.directionHeader}>
-            {section.lineId ? <LineBadge lineId={section.lineId} /> : null}
-            <Text style={styles.directionTitle}>{section.title}</Text>
-          </View>
-        )}
-        renderItem={({ item }) => {
-          const countdownLabel = formatArrivalCountdown(
-            item,
-            countdownNow,
-            t("station.arriving"),
-            t("station.minutes"),
-          );
-
-          if (!countdownLabel) {
-            return null;
-          }
-
-          return (
-            <View style={styles.card}>
-              <ArrivalTimePill label={countdownLabel} styles={styles} />
-              <View style={styles.arrivalBody}>
+        renderSectionHeader={({ section }) =>
+          section.lineId ? (
+            <View style={styles.directionHeader}>
+              <LineSectionChip lineId={section.lineId} title={section.title} styles={styles} />
+            </View>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <View style={styles.card}>
+            <View style={styles.arrivalBody}>
+              <View style={styles.destinationRow}>
+                {item.lineId ? <ArrivalLineIndicator lineId={item.lineId} styles={styles} /> : null}
                 <Text style={styles.destination}>{item.destination}</Text>
-                {item.lineId ? (
-                  <View style={styles.arrivalMeta}>
-                    <LineBadge lineId={item.lineId} />
-                  </View>
-                ) : null}
+              </View>
+              <View style={styles.arrivalTimes}>
+                {item.arrivals.map((arrival) => {
+                  const countdownLabel = formatArrivalCountdown(arrival, countdownNow, arrivingLabel, minuteLabel);
+                  const isExiting = countdownLabel === null || !isArrivalVisible(arrival, countdownNow);
+
+                  return (
+                    <AnimatedArrivalTimePill
+                      key={arrival.id}
+                      arrivalId={arrival.id}
+                      isExiting={isExiting}
+                      label={countdownLabel ?? arrivingLabel}
+                      onExited={markArrivalExited}
+                      styles={styles}
+                    />
+                  );
+                })}
               </View>
             </View>
-          );
-        }}
+          </View>
+        )}
         ListEmptyComponent={
           isLoading ? null : <Text style={styles.empty}>{emptyMessage}</Text>
         }
       />
     </Screen>
+    </>
+  );
+}
+
+function ArrivalLineIndicator({
+  lineId,
+  styles,
+}: {
+  lineId: string;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const lineColor = lineById[lineId]?.color;
+
+  return lineColor ? <View style={[styles.arrivalLineIndicator, { backgroundColor: lineColor }]} /> : null;
+}
+
+function LineSectionChip({
+  lineId,
+  styles,
+  title,
+}: {
+  lineId: string;
+  styles: ReturnType<typeof createStyles>;
+  title: string;
+}) {
+  const lineColor = lineById[lineId]?.color;
+  const isYellowLine = lineId === "yellow";
+
+  return (
+    <View style={[styles.lineSectionChip, lineColor ? { backgroundColor: lineColor, borderColor: lineColor } : null]}>
+      <Text style={[styles.lineSectionChipText, isYellowLine ? styles.lineSectionChipTextDark : styles.lineSectionChipTextLight]}>
+        {title}
+      </Text>
+    </View>
+  );
+}
+
+function AnimatedArrivalTimePill({
+  arrivalId,
+  isExiting,
+  label,
+  onExited,
+  styles,
+}: {
+  arrivalId: string;
+  isExiting: boolean;
+  label: string;
+  onExited: (arrivalId: string) => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        duration: isExiting ? EXIT_ANIMATION_MS : 120,
+        toValue: isExiting ? 0 : 1,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        duration: isExiting ? EXIT_ANIMATION_MS : 120,
+        toValue: isExiting ? -4 : 0,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished && isExiting) {
+        onExited(arrivalId);
+      }
+    });
+  }, [arrivalId, isExiting, onExited, opacity, translateY]);
+
+  return (
+    <Animated.View style={[styles.arrivalTimeWrapper, { opacity, transform: [{ translateY }] }]}>
+      <ArrivalTimePill label={label} styles={styles} />
+    </Animated.View>
   );
 }
 
@@ -455,8 +747,6 @@ function ArrivalTimePill({
   return (
     <View style={[styles.arrivalTime, styles.arrivalTimeArriving]}>
       <Text
-        adjustsFontSizeToFit
-        minimumFontScale={0.78}
         numberOfLines={2}
         style={styles.arrivingText}
       >
@@ -557,9 +847,16 @@ function createStyles(colors: AppTheme["colors"]) {
     statusPanelTitle: {
       color: colors.text,
       flex: 1,
-      fontSize: typography.caption,
+      fontSize: typography.body,
       fontWeight: "900",
-      lineHeight: 18,
+      lineHeight: 22,
+    },
+    innerSectionTitle: {
+      color: colors.accent,
+      fontSize: typography.small,
+      fontWeight: "900",
+      letterSpacing: 0,
+      lineHeight: 16,
       textTransform: "uppercase",
     },
     updatedAt: {
@@ -589,19 +886,42 @@ function createStyles(colors: AppTheme["colors"]) {
       paddingBottom: spacing.xs,
       paddingTop: spacing.sm,
     },
+    lineSectionChip: {
+      alignItems: "center",
+      alignSelf: "flex-start",
+      backgroundColor: colors.accent,
+      borderColor: colors.border,
+      borderRadius: 999,
+      borderWidth: 1,
+      flexDirection: "row",
+      minHeight: 32,
+      overflow: "hidden",
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    lineSectionChipText: {
+      fontSize: typography.caption,
+      fontWeight: "900",
+      lineHeight: 18,
+    },
+    lineSectionChipTextDark: {
+      color: colors.text,
+    },
+    lineSectionChipTextLight: {
+      color: colors.surface,
+    },
     directionTitle: {
       color: colors.text,
       fontSize: typography.body,
       fontWeight: "900",
     },
     card: {
-      alignItems: "center",
+      alignItems: "stretch",
       backgroundColor: colors.surface,
       borderColor: colors.border,
       borderRadius: radius.lg,
       borderWidth: 1,
-      flexDirection: "row",
-      gap: spacing.md,
+      gap: spacing.sm,
       marginBottom: spacing.sm,
       padding: spacing.md,
       shadowColor: colors.shadow,
@@ -614,11 +934,16 @@ function createStyles(colors: AppTheme["colors"]) {
       alignItems: "center",
       backgroundColor: colors.accentSoft,
       borderRadius: radius.md,
+      flexShrink: 0,
       justifyContent: "center",
       minHeight: 58,
       minWidth: 72,
       paddingHorizontal: spacing.xs,
       paddingVertical: spacing.xs,
+      width: 72,
+    },
+    arrivalTimeWrapper: {
+      flexShrink: 0,
     },
     minutesValue: {
       color: colors.accent,
@@ -633,24 +958,42 @@ function createStyles(colors: AppTheme["colors"]) {
       lineHeight: 13,
     },
     arrivalTimeArriving: {
-      maxWidth: 82,
-      minWidth: 82,
+      minHeight: 58,
+      minWidth: 72,
+      width: 72,
     },
     arrivingText: {
       color: colors.accent,
-      fontSize: 13,
+      fontSize: 12,
       fontWeight: "900",
-      lineHeight: 16,
+      lineHeight: 14,
       textAlign: "center",
+      width: 60,
     },
     arrivalBody: {
       flex: 1,
       gap: spacing.sm,
     },
+    arrivalTimes: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+    },
     destination: {
       color: colors.text,
       fontSize: typography.heading,
       fontWeight: "900",
+    },
+    destinationRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.xs,
+    },
+    arrivalLineIndicator: {
+      borderRadius: 999,
+      height: 10,
+      width: 10,
     },
     arrivalMeta: {
       alignItems: "center",

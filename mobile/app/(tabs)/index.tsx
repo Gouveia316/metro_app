@@ -1,15 +1,19 @@
 import { Link, useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
   formatArrivalCountdown,
   isArrivalVisible,
 } from "@/api/arrivalCountdown";
 import {
+  fetchStationArrivalsCached,
+  getCachedStationArrivals,
+  isStationArrivalsFresh,
+} from "@/api/arrivalCache";
+import {
   fetchOfficialLineStatus,
-  fetchOfficialStationArrivals,
   fetchOfficialStations,
 } from "@/api/client";
 import type { StationArrivalsResult } from "@/api/client";
@@ -59,6 +63,14 @@ type ArrivalPreviewState = {
   updatedAt: string | null;
 };
 
+type CountdownArrivalItem = {
+  displayMinutes?: number;
+  id: string;
+  minutes?: number;
+  responseUpdatedAt?: string;
+  secondsUntilArrival?: number;
+};
+
 type ServiceSummary = {
   affectedLines: MetroLine[];
   message: string;
@@ -89,6 +101,8 @@ const DEBUG_NEAREST_STATIONS: Record<string, Station> = {
   SA: { id: "SA", name: "Saldanha", lineIds: ["yellow", "red"], lines: ["yellow", "red"] },
   SS: { id: "SS", name: "São Sebastião", lineIds: ["blue", "red"], lines: ["blue", "red"] },
 };
+
+const EXIT_ANIMATION_MS = 180;
 
 function getHomeStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
   if (status === "good_service") {
@@ -221,6 +235,39 @@ function getMockArrivalsForStation(station?: Station) {
   return matchingMockStation ? arrivalsByStation[matchingMockStation.id] ?? [] : [];
 }
 
+const destinationLineIdsByName = Object.values(arrivalsByStation).reduce<Record<string, string[]>>(
+  (acc, arrivals) => {
+    arrivals.forEach((arrival) => {
+      const destinationKey = normalizeStationName(arrival.destination);
+      const existingLineIds = acc[destinationKey] ?? [];
+
+      if (!existingLineIds.includes(arrival.lineId)) {
+        acc[destinationKey] = [...existingLineIds, arrival.lineId];
+      }
+    });
+
+    return acc;
+  },
+  {},
+);
+
+function getReliableArrivalLineId(destination: string, station?: Station) {
+  if (!station) {
+    return undefined;
+  }
+
+  const stationLineIds = getStationLineIds(station);
+
+  if (stationLineIds.length === 1) {
+    return stationLineIds[0];
+  }
+
+  const destinationLineIds = destinationLineIdsByName[normalizeStationName(destination)] ?? [];
+  const knownLineId = destinationLineIds.length === 1 ? destinationLineIds[0] : undefined;
+
+  return knownLineId && stationLineIds.includes(knownLineId) ? knownLineId : undefined;
+}
+
 function mapMockArrivalPreview(arrivals: Arrival[]): ArrivalPreviewItem[] {
   return arrivals
     .map((arrival) => ({
@@ -234,22 +281,26 @@ function mapMockArrivalPreview(arrivals: Arrival[]): ArrivalPreviewItem[] {
     .slice(0, 3);
 }
 
-function mapLiveArrivalPreview(result: StationArrivalsResult): ArrivalPreviewItem[] {
+function mapLiveArrivalPreview(result: StationArrivalsResult, station?: Station): ArrivalPreviewItem[] {
   return result.platforms
     .flatMap((platform) =>
       platform.outOfService
         ? []
-        : platform.arrivals.map((arrival) => ({
-            destination: platform.destinationName?.trim() || platform.destinationCode || "-",
-            id: `${platform.platformId}-${arrival.id}`,
-            displayMinutes: arrival.displayMinutes,
-            minutes: arrival.displayMinutes ?? arrival.minutes,
-            responseUpdatedAt: platform.responseUpdatedAt,
-            secondsUntilArrival: arrival.secondsUntilArrival,
-          })),
+        : platform.arrivals.map((arrival) => {
+            const destination = platform.destinationName?.trim() || platform.destinationCode || "-";
+
+            return {
+              destination,
+              id: `${platform.platformId}-${arrival.id}`,
+              lineId: getReliableArrivalLineId(destination, station),
+              displayMinutes: arrival.displayMinutes,
+              minutes: arrival.displayMinutes ?? arrival.minutes,
+              responseUpdatedAt: platform.responseUpdatedAt,
+              secondsUntilArrival: arrival.secondsUntilArrival,
+            };
+          }),
     )
     .sort((firstArrival, secondArrival) => firstArrival.minutes - secondArrival.minutes)
-    .slice(0, 3);
 }
 
 function getStationRouteParams(station: Station) {
@@ -345,7 +396,19 @@ function getLocalArrivalPreview(station?: Station): ArrivalPreviewState {
   };
 }
 
-function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
+function getLiveArrivalPreview(result: StationArrivalsResult, station?: Station): ArrivalPreviewState {
+  return {
+    dataMode: "live",
+    emptyReason: result.emptyReason,
+    hasError: false,
+    isLoading: false,
+    items: mapLiveArrivalPreview(result, station),
+    state: result.state,
+    updatedAt: result.updatedAt,
+  };
+}
+
+function useStationArrivalPreview(station?: Station, refreshToken = 0): ArrivalPreviewState {
   const stationId = station?.id;
   const [preview, setPreview] = useState<ArrivalPreviewState>(emptyArrivalPreview);
 
@@ -358,30 +421,40 @@ function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
         return;
       }
 
-      setPreview((currentPreview) => ({
-        ...currentPreview,
-        hasError: false,
-        isLoading: true,
-      }));
+      const cachedResult = getCachedStationArrivals(stationId);
+
+      if (cachedResult) {
+        setPreview(getLiveArrivalPreview(cachedResult, station));
+
+        if (isStationArrivalsFresh(stationId)) {
+          return;
+        }
+      } else {
+        setPreview((currentPreview) => ({
+          ...currentPreview,
+          hasError: false,
+          isLoading: true,
+        }));
+      }
 
       try {
-        const result = await fetchOfficialStationArrivals(stationId);
+        const result = await fetchStationArrivalsCached(stationId);
 
         if (!isMounted) {
           return;
         }
 
-        setPreview({
-          dataMode: "live",
-          emptyReason: result.emptyReason,
-          hasError: false,
-          isLoading: false,
-          items: mapLiveArrivalPreview(result),
-          state: result.state,
-          updatedAt: result.updatedAt,
-        });
+        setPreview(getLiveArrivalPreview(result, station));
       } catch {
         if (!isMounted) {
+          return;
+        }
+
+        if (cachedResult) {
+          setPreview({
+            ...getLiveArrivalPreview(cachedResult, station),
+            hasError: true,
+          });
           return;
         }
 
@@ -404,13 +477,65 @@ function useStationArrivalPreview(station?: Station): ArrivalPreviewState {
     return () => {
       isMounted = false;
     };
-  }, [station, stationId]);
+  }, [refreshToken, station, stationId]);
 
   return preview;
 }
 
+function hasLiveCountdown(arrival: CountdownArrivalItem) {
+  return typeof arrival.secondsUntilArrival === "number" && Boolean(arrival.responseUpdatedAt);
+}
+
+function useArrivalExitAnimation(
+  arrivals: CountdownArrivalItem[],
+  now: number,
+  arrivingLabel: string,
+  minuteLabel: string,
+) {
+  const [removedArrivalIds, setRemovedArrivalIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentArrivalIds = new Set(arrivals.map((arrival) => arrival.id));
+
+    setRemovedArrivalIds((currentRemovedIds) => {
+      let nextRemovedIds = currentRemovedIds;
+
+      currentRemovedIds.forEach((arrivalId) => {
+        if (!currentArrivalIds.has(arrivalId)) {
+          nextRemovedIds = nextRemovedIds === currentRemovedIds ? new Set(currentRemovedIds) : nextRemovedIds;
+          nextRemovedIds.delete(arrivalId);
+        }
+      });
+
+      arrivals.forEach((arrival) => {
+        const countdownLabel = formatArrivalCountdown(arrival, now, arrivingLabel, minuteLabel);
+
+        if (countdownLabel !== null && nextRemovedIds.has(arrival.id)) {
+          nextRemovedIds = nextRemovedIds === currentRemovedIds ? new Set(currentRemovedIds) : nextRemovedIds;
+          nextRemovedIds.delete(arrival.id);
+        }
+      });
+
+      return nextRemovedIds;
+    });
+  }, [arrivals, arrivingLabel, minuteLabel, now]);
+
+  const markArrivalExited = useCallback((arrivalId: string) => {
+    setRemovedArrivalIds((currentRemovedIds) => {
+      if (currentRemovedIds.has(arrivalId)) {
+        return currentRemovedIds;
+      }
+
+      return new Set(currentRemovedIds).add(arrivalId);
+    });
+  }, []);
+
+  return { markArrivalExited, removedArrivalIds };
+}
+
 export default function HomeScreen() {
   const [countdownNow, setCountdownNow] = useState(() => Date.now());
+  const [arrivalRefreshToken, setArrivalRefreshToken] = useState(0);
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -445,11 +570,22 @@ export default function HomeScreen() {
   const debugNearestStation = getDebugNearestStation(nearestStation?.distanceMeters);
   const displayedNearestStation = debugNearestStation ?? nearestStation;
   const displayedNearestStationStatus = debugNearestStation ? "success" : nearestStationStatus;
-  const liveNearestArrivalPreview = useStationArrivalPreview(debugNearestStation ? undefined : nearestStation);
+  const shouldReuseNearestArrivalPreview =
+    Boolean(displayedNearestStation?.id) && displayedNearestStation?.id === resolvedFavoriteStation?.id;
+  const liveNearestArrivalPreview = useStationArrivalPreview(
+    debugNearestStation ? undefined : nearestStation,
+    arrivalRefreshToken,
+  );
   const nearestArrivalPreview = debugNearestStation
     ? getLocalArrivalPreview(debugNearestStation)
     : liveNearestArrivalPreview;
-  const favoriteArrivalPreview = useStationArrivalPreview(resolvedFavoriteStation);
+  const liveFavoriteArrivalPreview = useStationArrivalPreview(
+    shouldReuseNearestArrivalPreview ? undefined : resolvedFavoriteStation,
+    arrivalRefreshToken,
+  );
+  const favoriteArrivalPreview = shouldReuseNearestArrivalPreview
+    ? nearestArrivalPreview
+    : liveFavoriteArrivalPreview;
 
   const loadOfficialLines = useCallback(async () => {
     try {
@@ -470,6 +606,7 @@ export default function HomeScreen() {
       void reloadFavoriteStation();
       void refreshNearestStationsIfGranted();
       void loadOfficialLines();
+      setArrivalRefreshToken((currentRefreshToken) => currentRefreshToken + 1);
     }, [loadOfficialLines, refreshNearestStationsIfGranted, reloadFavoriteStation]),
   );
 
@@ -822,15 +959,25 @@ function StationArrivalsPreview({
   styles: ReturnType<typeof createStyles>;
   t: Translate;
 }) {
+  const arrivingLabel = t("station.arriving");
+  const minuteLabel = t("station.minutes");
+  const { markArrivalExited, removedArrivalIds } = useArrivalExitAnimation(
+    preview.items,
+    now,
+    arrivingLabel,
+    minuteLabel,
+  );
   const visibleItems = preview.items
     .map((arrival) => ({
       arrival,
-      countdownLabel: formatArrivalCountdown(arrival, now, t("station.arriving"), t("station.minutes")),
+      countdownLabel: formatArrivalCountdown(arrival, now, arrivingLabel, minuteLabel),
     }))
     .filter(
-      (item): item is { arrival: ArrivalPreviewItem; countdownLabel: string } =>
-        item.countdownLabel !== null && isArrivalVisible(item.arrival, now),
-    );
+      (item) =>
+        !removedArrivalIds.has(item.arrival.id) &&
+        (item.countdownLabel !== null || hasLiveCountdown(item.arrival)),
+    )
+    .slice(0, 3);
 
   return (
     <View style={styles.arrivalsBlock}>
@@ -853,21 +1000,76 @@ function StationArrivalsPreview({
       ) : null}
       {!preview.isLoading
         ? visibleItems.map(({ arrival, countdownLabel }) => (
-            <View key={arrival.id} style={styles.arrivalRow}>
-              <ArrivalTimePill label={countdownLabel} styles={styles} />
+            <AnimatedArrivalRow
+              key={arrival.id}
+              arrivalId={arrival.id}
+              isExiting={countdownLabel === null || !isArrivalVisible(arrival, now)}
+              onExited={markArrivalExited}
+            >
+            <View style={styles.arrivalRow}>
+              {arrival.lineId ? <ArrivalLineIndicator lineId={arrival.lineId} styles={styles} /> : null}
               <View style={styles.arrivalCopy}>
                 <Text style={styles.arrivalDestination}>{arrival.destination}</Text>
-                {arrival.lineId ? (
-                  <View style={styles.arrivalMeta}>
-                    <LineBadge lineId={arrival.lineId} />
-                  </View>
-                ) : null}
               </View>
+              <ArrivalTimePill label={countdownLabel ?? arrivingLabel} styles={styles} />
             </View>
+            </AnimatedArrivalRow>
           ))
         : null}
     </View>
   );
+}
+
+function AnimatedArrivalRow({
+  arrivalId,
+  children,
+  isExiting,
+  onExited,
+}: {
+  arrivalId: string;
+  children: ReactNode;
+  isExiting: boolean;
+  onExited: (arrivalId: string) => void;
+}) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        duration: isExiting ? EXIT_ANIMATION_MS : 120,
+        toValue: isExiting ? 0 : 1,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        duration: isExiting ? EXIT_ANIMATION_MS : 120,
+        toValue: isExiting ? -4 : 0,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished && isExiting) {
+        onExited(arrivalId);
+      }
+    });
+  }, [arrivalId, isExiting, onExited, opacity, translateY]);
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      {children}
+    </Animated.View>
+  );
+}
+
+function ArrivalLineIndicator({
+  lineId,
+  styles,
+}: {
+  lineId: string;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const lineColor = lineById[lineId]?.color;
+
+  return lineColor ? <View style={[styles.arrivalLineIndicator, { backgroundColor: lineColor }]} /> : null;
 }
 
 function ArrivalTimePill({
@@ -1196,6 +1398,11 @@ function createStyles(colors: AppTheme["colors"]) {
       flexDirection: "row",
       gap: spacing.sm,
     },
+    arrivalLineIndicator: {
+      borderRadius: 999,
+      height: 10,
+      width: 10,
+    },
     arrivalMinutes: {
       alignItems: "center",
       backgroundColor: colors.accentSoft,
@@ -1219,14 +1426,15 @@ function createStyles(colors: AppTheme["colors"]) {
       lineHeight: 12,
     },
     arrivalMinutesArriving: {
-      maxWidth: 64,
-      minWidth: 64,
+      maxWidth: 58,
+      minHeight: 46,
+      minWidth: 58,
     },
     arrivalMinutesArrivingText: {
       color: colors.accent,
-      fontSize: 12,
+      fontSize: 11,
       fontWeight: "900",
-      lineHeight: 14,
+      lineHeight: 13,
       textAlign: "center",
     },
     arrivalCopy: {
