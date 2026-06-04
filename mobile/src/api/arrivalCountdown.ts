@@ -46,11 +46,10 @@ export function formatArrivalCountdown(
       return arrivingLabel;
     }
 
-    if (remainingSeconds < 90) {
-      return `1 ${minuteLabel}`;
-    }
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
 
-    return `${Math.ceil(remainingSeconds / 60)} ${minuteLabel}`;
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
   }
 
   const fallbackMinutes =

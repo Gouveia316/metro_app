@@ -251,18 +251,26 @@ const destinationLineIdsByName = Object.values(arrivalsByStation).reduce<Record<
   {},
 );
 
-function getReliableArrivalLineId(destination: string, station?: Station) {
+function getReliableArrivalLineId(destination: string, station?: Station, destinationCode?: string | null) {
   if (!station) {
     return undefined;
   }
 
   const stationLineIds = getStationLineIds(station);
+  const normalizedDestination = normalizeStationName(destination);
+
+  if (
+    station.id === "MP" &&
+    (normalizedDestination === normalizeStationName("Campo Grande") || destinationCode?.trim() === "45")
+  ) {
+    return "yellow";
+  }
 
   if (stationLineIds.length === 1) {
     return stationLineIds[0];
   }
 
-  const destinationLineIds = destinationLineIdsByName[normalizeStationName(destination)] ?? [];
+  const destinationLineIds = destinationLineIdsByName[normalizedDestination] ?? [];
   const knownLineId = destinationLineIds.length === 1 ? destinationLineIds[0] : undefined;
 
   return knownLineId && stationLineIds.includes(knownLineId) ? knownLineId : undefined;
@@ -292,7 +300,7 @@ function mapLiveArrivalPreview(result: StationArrivalsResult, station?: Station)
             return {
               destination,
               id: `${platform.platformId}-${arrival.id}`,
-              lineId: getReliableArrivalLineId(destination, station),
+              lineId: getReliableArrivalLineId(destination, station, platform.destinationCode),
               displayMinutes: arrival.displayMinutes,
               minutes: arrival.displayMinutes ?? arrival.minutes,
               responseUpdatedAt: platform.responseUpdatedAt,
@@ -1079,7 +1087,16 @@ function ArrivalTimePill({
   label: string;
   styles: ReturnType<typeof createStyles>;
 }) {
+  const timeMatch = label.match(/^\d+:\d{2}$/);
   const numericMatch = label.match(/^(\d+)\s+(.+)$/);
+
+  if (timeMatch) {
+    return (
+      <View style={[styles.arrivalMinutes, styles.arrivalMinutesCountdown]}>
+        <Text style={styles.arrivalMinutesCountdownText}>{label}</Text>
+      </View>
+    );
+  }
 
   if (numericMatch) {
     return (
@@ -1425,10 +1442,20 @@ function createStyles(colors: AppTheme["colors"]) {
       fontWeight: "800",
       lineHeight: 12,
     },
+    arrivalMinutesCountdown: {
+      minWidth: 64,
+      width: 64,
+    },
+    arrivalMinutesCountdownText: {
+      color: colors.accent,
+      fontSize: 15,
+      fontWeight: "900",
+      lineHeight: 18,
+      textAlign: "center",
+    },
     arrivalMinutesArriving: {
-      maxWidth: 58,
-      minHeight: 46,
-      minWidth: 58,
+      minWidth: 64,
+      width: 64,
     },
     arrivalMinutesArrivingText: {
       color: colors.accent,

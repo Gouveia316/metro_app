@@ -176,14 +176,22 @@ function getPublicDestination(waitTime: OfficialWaitTime) {
   return waitTime.destinationName?.trim() || waitTime.destinationCode.trim() || "-";
 }
 
-function getReliableArrivalLineId(destination: string, station: Station) {
+function getReliableArrivalLineId(destination: string, station: Station, destinationCode?: string | null) {
   const stationLineIds = getStationLineIds(station);
+  const normalizedDestination = normalizeStationName(destination);
+
+  if (
+    station.id === "MP" &&
+    (normalizedDestination === normalizeStationName("Campo Grande") || destinationCode?.trim() === "45")
+  ) {
+    return "yellow";
+  }
 
   if (stationLineIds.length === 1) {
     return stationLineIds[0];
   }
 
-  const destinationLineIds = destinationLineIdsByName[normalizeStationName(destination)] ?? [];
+  const destinationLineIds = destinationLineIdsByName[normalizedDestination] ?? [];
   const knownLineId = destinationLineIds.length === 1 ? destinationLineIds[0] : undefined;
 
   return knownLineId && stationLineIds.includes(knownLineId) ? knownLineId : undefined;
@@ -251,7 +259,7 @@ function groupLiveArrivalsByPublicSection(
     }
 
     const destination = getPublicDestination(waitTime);
-    const lineId = getReliableArrivalLineId(destination, station);
+    const lineId = getReliableArrivalLineId(destination, station, waitTime.destinationCode);
 
     return waitTime.arrivals.map((arrival) => ({
       destination,
@@ -733,7 +741,16 @@ function ArrivalTimePill({
   label: string;
   styles: ReturnType<typeof createStyles>;
 }) {
+  const timeMatch = label.match(/^\d+:\d{2}$/);
   const numericMatch = label.match(/^(\d+)\s+(.+)$/);
+
+  if (timeMatch) {
+    return (
+      <View style={[styles.arrivalTime, styles.arrivalTimeCountdown]}>
+        <Text style={styles.arrivalTimeCountdownText}>{label}</Text>
+      </View>
+    );
+  }
 
   if (numericMatch) {
     return (
@@ -956,6 +973,16 @@ function createStyles(colors: AppTheme["colors"]) {
       fontSize: 11,
       fontWeight: "800",
       lineHeight: 13,
+    },
+    arrivalTimeCountdown: {
+      width: 76,
+    },
+    arrivalTimeCountdownText: {
+      color: colors.accent,
+      fontSize: 16,
+      fontWeight: "900",
+      lineHeight: 20,
+      textAlign: "center",
     },
     arrivalTimeArriving: {
       minHeight: 58,
