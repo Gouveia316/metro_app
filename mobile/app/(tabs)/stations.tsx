@@ -214,10 +214,6 @@ export default function StationsScreen() {
   const [query, setQuery] = useState("");
   const [activeLineFilter, setActiveLineFilter] = useState<StationLineFilter>("all");
   const [displayStations, setDisplayStations] = useState<Station[]>(stations);
-  const [dataMode, setDataMode] = useState<"live" | "mocked">("mocked");
-  const [hasError, setHasError] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const { language, t, theme } = useAppPreferences();
   const { favoriteStationId, reloadFavoriteStation } = useFavoriteStation();
   const styles = createStyles(theme.colors);
@@ -240,22 +236,12 @@ export default function StationsScreen() {
         }
 
         setDisplayStations(result.stations);
-        setDataMode("live");
-        setUpdatedAt(result.updatedAt);
-        setHasError(false);
       } catch {
         if (!isMounted) {
           return;
         }
 
         setDisplayStations(stations);
-        setDataMode("mocked");
-        setUpdatedAt(null);
-        setHasError(true);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
       }
     }
 
@@ -345,25 +331,6 @@ export default function StationsScreen() {
                   </Pressable>
                 );
               })}
-            </View>
-            <View style={styles.statusPanel}>
-              <View style={styles.statusPanelHeader}>
-                <Text
-                  style={[
-                    styles.dataLabel,
-                    dataMode === "live" ? styles.liveDataLabel : styles.mockedDataLabel,
-                  ]}
-                >
-                  {dataMode === "live" ? t("stations.data.live") : t("stations.data.mockedFallback")}
-                </Text>
-                {updatedAt ? (
-                  <Text style={styles.updatedAt}>
-                    {t("stations.updatedAt", { time: new Date(updatedAt).toLocaleString() })}
-                  </Text>
-                ) : null}
-              </View>
-              {isLoading ? <Text style={styles.loadingText}>{t("stations.loading")}</Text> : null}
-              {hasError ? <Text style={styles.errorText}>{t("stations.error")}</Text> : null}
             </View>
             <Text style={styles.resultCount}>
               {t("stations.results", { count: filteredStations.length })}
@@ -484,53 +451,6 @@ function createStyles(colors: AppTheme["colors"]) {
     filterButtonText: {
       fontSize: typography.caption,
       fontWeight: "900",
-    },
-    statusPanel: {
-      backgroundColor: colors.surface,
-      borderColor: colors.border,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      gap: spacing.xs,
-      padding: spacing.md,
-    },
-    statusPanelHeader: {
-      alignItems: "center",
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: spacing.xs,
-      justifyContent: "space-between",
-    },
-    dataLabel: {
-      borderRadius: 999,
-      fontSize: typography.small,
-      fontWeight: "900",
-      overflow: "hidden",
-      paddingHorizontal: spacing.sm,
-      paddingVertical: spacing.xs,
-    },
-    liveDataLabel: {
-      backgroundColor: colors.successSoft,
-      color: colors.success,
-    },
-    mockedDataLabel: {
-      backgroundColor: colors.warningSoft,
-      color: colors.warning,
-    },
-    updatedAt: {
-      color: colors.muted,
-      fontSize: typography.small,
-      fontWeight: "700",
-    },
-    loadingText: {
-      color: colors.muted,
-      fontSize: typography.caption,
-      fontWeight: "700",
-    },
-    errorText: {
-      color: colors.warning,
-      fontSize: typography.caption,
-      fontWeight: "800",
-      lineHeight: 18,
     },
     card: {
       alignItems: "center",

@@ -15,6 +15,10 @@ from urllib.request import Request, urlopen
 
 TOKEN_REFRESH_BUFFER_SECONDS = 60
 REQUEST_TIMEOUT_SECONDS = 15
+OFFICIAL_LINES_TTL_SECONDS = 30
+OFFICIAL_WAIT_TIMES_TTL_SECONDS = 15
+OFFICIAL_STATIONS_TTL_SECONDS = 24 * 60 * 60
+OFFICIAL_DESTINATIONS_TTL_SECONDS = 24 * 60 * 60
 
 
 def _normalize_text(value: Any) -> str:
@@ -31,6 +35,16 @@ def _is_circulation_closed_payload(payload: Any) -> bool:
         return False
 
     return "circulacao encerrada" in _normalize_text(payload.get("resposta"))
+
+
+def _is_cacheable_official_payload(payload: Any) -> bool:
+    if _is_circulation_closed_payload(payload):
+        return True
+
+    if not isinstance(payload, dict):
+        return False
+
+    return str(payload.get("codigo")) == "200"
 
 
 class MetroApiError(Exception):
@@ -55,22 +69,63 @@ class CachedAccessToken:
     expires_at: float
 
 
+@dataclass
+class CachedOfficialResponse:
+    value: dict[str, Any]
+    expires_at: float
+
+
 class MetroOfficialApiClient:
     def __init__(self) -> None:
         self._cached_token: CachedAccessToken | None = None
+        self._response_cache: dict[str, CachedOfficialResponse] = {}
         self._env_loaded = False
 
     def get_lines(self) -> dict[str, Any]:
-        return self._wrap_response(self._get_json("/estadoLinha/todos"))
+        return self._get_cached_response(
+            "official:lines",
+            "/estadoLinha/todos",
+            OFFICIAL_LINES_TTL_SECONDS,
+        )
 
     def get_stations(self) -> dict[str, Any]:
-        return self._wrap_response(self._get_json("/infoEstacao/todos"))
+        return self._get_cached_response(
+            "official:stations",
+            "/infoEstacao/todos",
+            OFFICIAL_STATIONS_TTL_SECONDS,
+        )
 
     def get_destinations(self) -> dict[str, Any]:
-        return self._wrap_response(self._get_json("/infoDestinos/todos"))
+        return self._get_cached_response(
+            "official:destinations",
+            "/infoDestinos/todos",
+            OFFICIAL_DESTINATIONS_TTL_SECONDS,
+        )
 
     def get_wait_times(self) -> dict[str, Any]:
-        return self._wrap_response(self._get_json("/tempoEspera/Estacao/todos"))
+        return self._get_cached_response(
+            "official:wait-times",
+            "/tempoEspera/Estacao/todos",
+            OFFICIAL_WAIT_TIMES_TTL_SECONDS,
+        )
+
+    def _get_cached_response(self, cache_key: str, path: str, ttl_seconds: int) -> dict[str, Any]:
+        now = time.time()
+        cached_response = self._response_cache.get(cache_key)
+
+        if cached_response and now < cached_response.expires_at:
+            return cached_response.value
+
+        payload = self._get_json(path)
+        response = self._wrap_response(payload)
+
+        if _is_cacheable_official_payload(payload):
+            self._response_cache[cache_key] = CachedOfficialResponse(
+                value=response,
+                expires_at=now + ttl_seconds,
+            )
+
+        return response
 
     def _wrap_response(self, data: Any) -> dict[str, Any]:
         return {
