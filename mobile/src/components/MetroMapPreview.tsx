@@ -112,12 +112,20 @@ export function MetroMapPreview({ lineStatuses }: Props) {
 
     return styles.legendLineClosed;
   };
+  const isWarningMarkerStatus = (status: Exclude<MetroDiagramLineStatus, "normal">) =>
+    status === "disrupted" || status === "interrupted";
   const renderLegend = (containerStyle: StyleProp<ViewStyle>) =>
     shouldShowLegend ? (
       <View pointerEvents="none" style={[styles.legend, containerStyle]}>
         {activeLegendStatuses.map((status) => (
           <View key={status} style={styles.legendItem}>
-            <View style={[styles.legendLine, getLegendLineStyle(status)]} />
+            {isWarningMarkerStatus(status) ? (
+              <View style={[styles.legendMarker, getLegendLineStyle(status)]}>
+                <Text style={styles.legendMarkerText}>!</Text>
+              </View>
+            ) : (
+              <View style={[styles.legendLine, getLegendLineStyle(status)]} />
+            )}
             <Text style={styles.legendText}>{t(LEGEND_LABEL_KEYS[status])}</Text>
           </View>
         ))}
@@ -272,19 +280,32 @@ function createStyles(colors: AppTheme["colors"]) {
       height: 3,
       width: 22,
     },
+    legendMarker: {
+      alignItems: "center",
+      borderRadius: 999,
+      borderColor: "#FFFFFF",
+      borderWidth: 1.5,
+      height: 13,
+      justifyContent: "center",
+      width: 13,
+    },
+    legendMarkerText: {
+      color: "#FFFFFF",
+      fontSize: 8,
+      fontWeight: "900",
+      lineHeight: 10,
+    },
     legendLineDisrupted: {
-      backgroundColor: colors.accent,
-      opacity: 0.8,
+      backgroundColor: "#F59E0B",
     },
     legendLineInterrupted: {
-      backgroundColor: colors.accent,
-      opacity: 0.6,
+      backgroundColor: "#EF4444",
     },
     legendLineClosed: {
-      backgroundColor: "#9CA3AF",
+      backgroundColor: "#6B7280",
     },
     legendLineUnknown: {
-      backgroundColor: "#CBD5E1",
+      backgroundColor: "#94A3B8",
     },
     legendText: {
       color: colors.muted,

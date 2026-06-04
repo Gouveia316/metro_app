@@ -1,4 +1,5 @@
 import unicodedata
+import logging
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
@@ -27,6 +28,7 @@ app = FastAPI(
 )
 
 metro_official_client = MetroOfficialApiClient()
+logger = logging.getLogger(__name__)
 
 
 LineStatus = Literal["good_service", "minor_delays", "suspended"]
@@ -41,6 +43,7 @@ ArrivalState = Literal[
 ]
 ArrivalEmptyReason = Literal[
     "strike",
+    "service_closed",
     "all_arrivals_unavailable",
     "station_not_found_in_wait_times",
 ]
@@ -139,8 +142,11 @@ class NormalizedStationArrivalsResponse(BaseModel):
     source: str
     updatedAt: str
     stationId: str
+    status: str | None = None
+    message: str | None = None
     state: ArrivalState
     emptyReason: ArrivalEmptyReason | None
+    arrivals: list[NormalizedArrival] = []
     platforms: list[NormalizedPlatformArrivals]
 
 
@@ -157,6 +163,8 @@ class NormalizedWaitTime(BaseModel):
 class NormalizedWaitTimesResponse(BaseModel):
     source: str
     updatedAt: str
+    status: str | None = None
+    message: str | None = None
     waitTimes: list[NormalizedWaitTime]
 
 
@@ -355,10 +363,38 @@ def official_response_data(response: dict[str, Any]) -> Any:
     return data.get("resposta")
 
 
+def is_circulation_closed_response(response: dict[str, Any]) -> bool:
+    payload = response.get("data")
+
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+
+    if not isinstance(payload, dict):
+        return False
+
+    resposta = normalize_text(payload.get("resposta"))
+    return "circulacao encerrada" in resposta
+
+
+def get_circulation_closed_message(response: dict[str, Any]) -> str:
+    payload = response.get("data")
+
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+
+    if isinstance(payload, dict):
+        return trim_or_none(payload.get("resposta")) or "Circulação encerrada"
+
+    return "Circulação encerrada"
+
+
 def normalize_line_status(short_status: Any, message: Any) -> NormalizedLineStatus:
     normalized_status = normalize_text(short_status)
     normalized_message = normalize_text(message)
     combined_text = f"{normalized_status} {normalized_message}".strip()
+
+    if "greve" in combined_text:
+        return "interrupted"
 
     if not normalized_status:
         return "unknown"
@@ -369,7 +405,6 @@ def normalize_line_status(short_status: Any, message: Any) -> NormalizedLineStat
     if (
         "servico encerrado" in normalized_status
         or "encerrado" in normalized_status
-        or "greve" in combined_text
     ):
         return "closed"
 
@@ -403,6 +438,32 @@ def get_line_status_reason(
 
 
 def normalize_lines_response(response: dict[str, Any]) -> NormalizedLinesResponse:
+    if is_circulation_closed_response(response):
+        message = get_circulation_closed_message(response)
+        logger.info("Official Metro API reports operational closure: %s", message)
+
+        return NormalizedLinesResponse(
+            source=response["source"],
+            updatedAt=response["updatedAt"],
+            lines=[
+                NormalizedLine(
+                    id=metadata["id"],
+                    namePt=metadata["namePt"],
+                    nameEn=metadata["nameEn"],
+                    color=metadata["color"],
+                    status="closed",
+                    statusReason="closed",
+                    message=message,
+                    raw=NormalizedLineRaw(
+                        shortStatus="closed",
+                        message=message,
+                        messageType=None,
+                    ),
+                )
+                for metadata in LINE_METADATA.values()
+            ],
+        )
+
     official_lines = official_response_data(response)
 
     if not isinstance(official_lines, dict):
@@ -518,6 +579,18 @@ def normalize_wait_time_row(row: dict[str, Any]) -> NormalizedWaitTime | None:
 
 
 def normalize_wait_times_response(response: dict[str, Any]) -> NormalizedWaitTimesResponse:
+    if is_circulation_closed_response(response):
+        message = get_circulation_closed_message(response)
+        logger.info("Official Metro API reports operational closure for wait-times: %s", message)
+
+        return NormalizedWaitTimesResponse(
+            source=response["source"],
+            updatedAt=response["updatedAt"],
+            status="closed",
+            message=message,
+            waitTimes=[],
+        )
+
     official_wait_times = official_response_data(response)
 
     if not isinstance(official_wait_times, list):
@@ -536,6 +609,8 @@ def normalize_wait_times_response(response: dict[str, Any]) -> NormalizedWaitTim
     return NormalizedWaitTimesResponse(
         source=response["source"],
         updatedAt=response["updatedAt"],
+        status=None,
+        message=None,
         waitTimes=wait_times,
     )
 
@@ -565,6 +640,13 @@ def group_station_platforms(wait_times: list[NormalizedWaitTime]) -> list[Normal
 def all_service_closed_due_to_strike(lines_response: NormalizedLinesResponse) -> bool:
     return bool(lines_response.lines) and all(
         line.status == "closed" and line.statusReason == "strike"
+        for line in lines_response.lines
+    )
+
+
+def all_service_closed(lines_response: NormalizedLinesResponse) -> bool:
+    return bool(lines_response.lines) and all(
+        line.status == "closed"
         for line in lines_response.lines
     )
 
@@ -610,10 +692,13 @@ def get_official_metro_response(endpoint_name: str) -> dict[str, Any]:
         if endpoint_name == "wait-times":
             return metro_official_client.get_wait_times()
     except MetroApiConfigError as exc:
+        logger.exception("Metro API configuration error while fetching %s", endpoint_name)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except MetroApiAuthError as exc:
+        logger.exception("Metro API authentication error while fetching %s", endpoint_name)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except MetroApiRequestError as exc:
+        logger.exception("Metro API request error while fetching %s", endpoint_name)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     raise HTTPException(status_code=404, detail="Official Metro endpoint not found")
@@ -652,15 +737,29 @@ def get_normalized_wait_times() -> NormalizedWaitTimesResponse:
 @app.get("/metro/stations/{station_id}/arrivals", response_model=NormalizedStationArrivalsResponse)
 def get_normalized_station_arrivals(station_id: str) -> NormalizedStationArrivalsResponse:
     wait_times_response = normalize_wait_times_response(get_official_metro_response("wait-times"))
+
+    if wait_times_response.status == "closed":
+        return NormalizedStationArrivalsResponse(
+            source=wait_times_response.source,
+            updatedAt=wait_times_response.updatedAt,
+            stationId=station_id,
+            status="closed",
+            message=wait_times_response.message or "Circulação encerrada",
+            state="service_closed",
+            emptyReason="service_closed",
+            arrivals=[],
+            platforms=[],
+        )
+
     lines_response = normalize_lines_response(get_official_metro_response("lines"))
     station_wait_times = [
         wait_time for wait_time in wait_times_response.waitTimes if wait_time.stationId == station_id
     ]
     platforms = group_station_platforms(station_wait_times)
 
-    if all_service_closed_due_to_strike(lines_response):
+    if all_service_closed(lines_response):
         state: ArrivalState = "service_closed"
-        empty_reason: ArrivalEmptyReason | None = "strike"
+        empty_reason: ArrivalEmptyReason | None = "service_closed"
     elif not station_wait_times:
         state = "no_live_data"
         empty_reason = "station_not_found_in_wait_times"
@@ -675,7 +774,10 @@ def get_normalized_station_arrivals(station_id: str) -> NormalizedStationArrival
         source=wait_times_response.source,
         updatedAt=wait_times_response.updatedAt,
         stationId=station_id,
+        status="closed" if state == "service_closed" else None,
+        message=lines_response.lines[0].message if state == "service_closed" and lines_response.lines else None,
         state=state,
         emptyReason=empty_reason,
+        arrivals=[],
         platforms=platforms,
     )

@@ -16,7 +16,7 @@ type DebugLineStatus = "normal" | "disrupted" | "interrupted" | "closed" | "unkn
 
 // Local visual preview only. Keep null for normal use.
 // Example: { blue: "normal", yellow: "disrupted", green: "interrupted", red: "closed" }
-const DEBUG_LINE_STATUS_OVERRIDES: Partial<Record<LineId, DebugLineStatus>> | null = { blue: "normal", yellow: "disrupted", green: "interrupted", red: "closed" };
+const DEBUG_LINE_STATUS_OVERRIDES: Partial<Record<LineId, DebugLineStatus>> | null = null;
 
 function getStatusStyles(status: LineStatus, colors: AppTheme["colors"]) {
   if (status === "good_service") {
