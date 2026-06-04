@@ -3,6 +3,7 @@ import json
 import os
 import ssl
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,22 @@ from urllib.request import Request, urlopen
 
 TOKEN_REFRESH_BUFFER_SECONDS = 60
 REQUEST_TIMEOUT_SECONDS = 15
+
+
+def _normalize_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    normalized = unicodedata.normalize("NFD", text.strip().lower())
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+def _is_circulation_closed_payload(payload: Any) -> bool:
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+
+    if not isinstance(payload, dict):
+        return False
+
+    return "circulacao encerrada" in _normalize_text(payload.get("resposta"))
 
 
 class MetroApiError(Exception):
@@ -80,6 +97,14 @@ class MetroOfficialApiClient:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(detail)
+            except json.JSONDecodeError:
+                payload = None
+
+            if _is_circulation_closed_payload(payload):
+                return payload
+
             raise MetroApiRequestError(
                 f"Metro API request failed with HTTP {exc.code}: {detail}"
             ) from exc
